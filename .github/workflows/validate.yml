@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install validators
-        run: sudo apt-get update && sudo apt-get install -y shellcheck openssh-server
+        run: sudo apt-get update && sudo apt-get install -y shellcheck openssh-server python3-yaml
       - name: Shell and safety tests
         run: bash tests/check.sh
       - name: Parse generated SSH policy with OpenSSH

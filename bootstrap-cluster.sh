@@ -32,6 +32,12 @@ fi
 install -m 0600 "$tmp/cluster.json" /etc/elektrokube/cluster.json
 "$REPO_ROOT/lib/install-node.sh" /etc/elektrokube/cluster.json "$role" "$node_ip" "$node_name" true ''
 wait_api
+# Once adopted, only Flux may change the Cilium Helm release.
+helm_crd=$(kube get crd helmreleases.helm.toolkit.fluxcd.io --ignore-not-found -o name)
+if [[ -n $helm_crd ]]; then
+  managed_release=$(kube -n kube-system get helmreleases.helm.toolkit.fluxcd.io cilium --ignore-not-found -o name)
+  [[ -z $managed_release ]] || die 'Cilium is managed by Flux. Use Git for changes, or gitops-cilium-and-flux.sh to verify the handoff.'
+fi
 install_helm
 install_cilium_cli
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml

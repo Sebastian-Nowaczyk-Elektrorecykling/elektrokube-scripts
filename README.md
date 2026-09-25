@@ -10,10 +10,12 @@ controller or a worker/controller hybrid. **New node** means a freshly installed
 Debian 13 machine joining as a worker, controller, or hybrid.
 
 This repository installs host prerequisites, k3s, Cilium, Hubble Relay/UI, and
-local administration tools. Flux installation, Flux reconciliation, application
-manifests, Longhorn, KubeVirt, GPU operators/device plugins, ingress/Gateway API,
-LAN DNS, and LoadBalancer address pools belong to later work in other repositories.
-There are no Flux manifests or GitHub-token prompts here.
+local administration tools. After initial provisioning, `gitops-cilium-and-flux.sh`
+installs raw Flux controllers and hands Cilium and Flux management to
+[elektrokube-cilium-and-flux](https://github.com/Sebastian-Nowaczyk-Elektrorecykling/elektrokube-cilium-and-flux).
+Application manifests, Longhorn, KubeVirt, GPU operators/device plugins,
+ingress/Gateway API, LAN DNS, and LoadBalancer address pools belong to later work.
+Flux manifests live in the GitOps repository; no GitHub token is needed here.
 
 ## Scripts and roles
 
@@ -24,6 +26,7 @@ There are no Flux manifests or GitHub-token prompts here.
 | `bootstrap-cluster.sh` | Bootstrap k3s and Cilium on a prepared first node; `hybrid` or `controller` |
 | `add-node.sh` | Ask for SSH credentials, establish restricted key access, prepare a new node, and join it automatically |
 | `prepare-admin.sh` | Install kubectl access, Helm, Cilium CLI, Headlamp Desktop, completions, and diagnostics |
+| `gitops-cilium-and-flux.sh` | Install raw Flux controllers and hand the existing Cilium release and Flux to their GitOps repository |
 
 | Role | k3s process | Embedded etcd | Ordinary application workloads |
 | --- | --- | --- | --- |
@@ -264,6 +267,51 @@ Traefik, ServiceLB and local-path storage. Cilium handles the CNI, network polic
 service forwarding and eBPF masquerading, with VXLAN tunneling and Kubernetes
 PodCIDR allocation. CoreDNS and metrics-server remain enabled. There is no
 default storage class until you install a storage provisioner.
+
+## Hand Cilium and Flux to GitOps
+
+After `install.sh` or `bootstrap-cluster.sh` succeeds, run on the **first node**:
+
+```bash
+git pull
+sudo ./gitops-cilium-and-flux.sh
+# If already root, omit sudo.
+```
+
+The script reads the resolved settings in `/etc/elektrokube/cluster.json` and
+uses `/etc/rancher/k3s/k3s.yaml`, independently of your shell's kubeconfig.
+It installs Debian's `python3-yaml` package if needed. It fetches `main` from
+`elektrokube-cilium-and-flux` into a temporary checkout and does not write to Git
+or call `flux bootstrap`. Neither the Flux CLI nor a GitHub token is required.
+
+Before the first handoff, the existing `cilium` Helm release in `kube-system`
+must be deployed with the same chart version and values as both the saved
+bootstrap configuration and the GitOps repository. A mismatch stops the script
+before cluster changes. An existing Flux Helm/Operator installation or a
+conflicting GitOps source also requires a deliberate migration first.
+
+The script applies `infrastructure/flux` directly, waits for the CRDs and four
+controllers, and creates `flux-system/cluster-settings` with `API_IP` and
+`CLUSTER_NAME` from the saved configuration. It then applies
+`clusters/elektrokube/flux-system`, which creates the GitRepository and root
+Kustomization. That repository owns the Flux controllers and adopts Cilium;
+the script never performs a Helm install/upgrade/uninstall of Cilium.
+
+Success requires fresh reconciliation of the fetched revision, including the
+`flux-system`, `flux`, and `cilium` Kustomizations and the Cilium HelmRelease.
+If interrupted, fix the reported problem and rerun the same command. Completed
+handoffs retain their Git-managed Cilium version/values and Flux controllers;
+the script does not reset them to bootstrap settings. Conflicting cluster
+settings and intentionally suspended reconciliation are not overwritten.
+
+After handoff, manage Cilium and Flux through Git. `bootstrap-cluster.sh` refuses
+to modify a Cilium release that has a HelmRelease. `add-node.sh` remains the
+node-enrollment entry point. Check status with:
+
+```bash
+kubectl -n flux-system get gitrepositories,kustomizations
+kubectl -n kube-system get helmrelease cilium
+```
 
 ## Add a new node from the first node
 
@@ -509,8 +557,9 @@ Every node records its role, first/join state, name, IP and k3s version in
 `/etc/elektrokube/node-identity`. Matching reruns resume an interrupted install.
 Different roles, addresses, versions, managed k3s configuration, or existing
 unmanaged k3s data cause a refusal; these are provisioning scripts, not a rolling
-upgrade or node-conversion tool. Do not rerun bootstrap after handing Cilium to
-Flux without first planning ownership and value changes.
+upgrade or node-conversion tool. After handing Cilium to Flux, bootstrap refuses
+to change its Helm release; use Git for changes and `gitops-cilium-and-flux.sh`
+to verify or finish the handoff.
 
 Defaults verified against upstream release/documentation references:
 
@@ -549,7 +598,7 @@ Before scheduling important workloads, verify on the actual machines:
 Offline repository checks (no host provisioning) are:
 
 ```bash
-# Requires python3 and shellcheck.
+# Requires python3, python3-yaml and shellcheck.
 bash tests/check.sh
 ```
 
@@ -573,5 +622,7 @@ GPU, storage, or VM acceptance tests.
 
 The design follows the host-preparation ideas in
 [minimum-k8s-net-elektro](https://github.com/Sebastian-Nowaczyk-Elektrorecykling/minimum-k8s-net-elektro),
-with separate SSH enrollment and a reboot-on-power-button policy. No Flux or
-application configuration is copied from that repository.
+with separate SSH enrollment and a reboot-on-power-button policy. Flux and
+Cilium manifests are maintained in `elektrokube-cilium-and-flux`; this repository
+only installs them and connects reconciliation. Application manifests remain
+separate.
