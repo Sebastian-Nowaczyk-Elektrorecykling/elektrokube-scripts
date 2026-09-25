@@ -10,7 +10,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
@@ -78,6 +78,19 @@ class ConfigTests(unittest.TestCase):
 
 
 class SSHTests(unittest.TestCase):
+    def test_root_commands_do_not_require_sudo(self):
+        a = argparse.Namespace(host="192.168.2.154", port=22, user="root")
+        c = enroll.Connection(a, "192.168.2.153", Path("key"), Path("known"))
+        c.login_password = "root-login-secret"
+        def fake_run(argv, **kwargs):
+            self.assertEqual(argv[-1], "/usr/bin/true")
+            self.assertNotIn("sudo", " ".join(argv))
+            self.assertIsNone(kwargs["input"])
+            self.assertEqual(os.read(kwargs["pass_fds"][0], 4096), b"root-login-secret\n")
+            return subprocess.CompletedProcess(argv, 0, b"")
+        with patch.object(enroll.subprocess, "run", side_effect=fake_run):
+            c.call("/usr/bin/true", password=True, root=True)
+
     def test_authentication_policy_is_exclusive(self):
         text = ssh_access.ssh_config("admin", "192.168.2.153", 2222)
         for required in ("AllowUsers admin@192.168.2.153", "PasswordAuthentication no",
@@ -126,6 +139,45 @@ class SSHTests(unittest.TestCase):
         blob = base64.b64encode(b"test-host-key").decode()
         self.assertTrue(enroll.fingerprint("host ssh-ed25519 " + blob).startswith("SHA256:"))
 
+    def test_fresh_root_falls_back_to_password_after_key_refusal(self):
+        conn = Mock(a=argparse.Namespace(user="root"), source="192.168.2.153")
+        conn.call.side_effect = [subprocess.CompletedProcess([], 255, b"", b"Permission denied (publickey,password)."),
+                                 subprocess.CompletedProcess([], 0, b"192.168.2.153 1234 192.168.2.154 22\n", b"")]
+        with patch.object(enroll.getpass, "getpass", return_value="secret") as prompt:
+            key_works, observed = enroll.authenticate(conn)
+        self.assertFalse(key_works)
+        self.assertTrue(observed.startswith(b"192.168.2.153 "))
+        self.assertEqual(conn.login_password, "secret")
+        prompt.assert_called_once()
+        self.assertTrue(conn.call.call_args_list[1].kwargs["password"])
+
+    def test_transport_failure_does_not_ask_for_a_password(self):
+        conn = Mock(a=argparse.Namespace(user="root"), source="192.168.2.153")
+        conn.call.return_value = subprocess.CompletedProcess([], 255, b"", b"connect to host: Connection refused")
+        with patch.object(enroll.getpass, "getpass") as prompt:
+            with self.assertRaisesRegex(RuntimeError, "openssh-server"):
+                enroll.authenticate(conn)
+        prompt.assert_not_called()
+
+    def test_root_rejection_explains_policy_without_claiming_bad_password(self):
+        conn = Mock(a=argparse.Namespace(user="root"), source="192.168.2.153")
+        conn.call.side_effect = [subprocess.CompletedProcess([], 255, b"", b"Permission denied (publickey)."),
+                                 subprocess.CompletedProcess([], 5, b"", b"Permission denied, please try again.")]
+        with patch.object(enroll.getpass, "getpass", return_value="do-not-log-this"):
+            with self.assertRaises(RuntimeError) as error:
+                enroll.authenticate(conn)
+        self.assertIn("Root enrollment needs no sudo", str(error.exception))
+        self.assertIn("192.168.2.153", str(error.exception))
+        self.assertNotIn("do-not-log-this", str(error.exception))
+
+    def test_existing_key_does_not_ask_for_password(self):
+        conn = Mock(a=argparse.Namespace(user="root"), source="192.168.2.153")
+        conn.call.return_value = subprocess.CompletedProcess([], 0, b"192.168.2.153 1234 192.168.2.154 22\n", b"")
+        with patch.object(enroll.getpass, "getpass") as prompt:
+            key_works, _ = enroll.authenticate(conn)
+        self.assertTrue(key_works)
+        prompt.assert_not_called()
+
     def test_bundle_excludes_git_and_private_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "bundle.tar.gz"
@@ -148,7 +200,8 @@ class TransactionTests(unittest.TestCase):
                                               "public_key": "ssh-ed25519 AAAA test"}))
         self.patches = [patch.object(ssh_access, "STATE", self.state),
                         patch.object(ssh_access, "SSHD_CONFIG", self.conf),
-                        patch.object(ssh_access, "AUTH_KEYS", self.root / "ssh" / "keys")]
+                        patch.object(ssh_access, "AUTH_KEYS", self.root / "ssh" / "keys"),
+                        patch.object(ssh_access, "ENROLLMENT_DROPIN", self.root / "enrollment.conf")]
         for p in self.patches:
             p.start()
 
@@ -194,6 +247,25 @@ class TransactionTests(unittest.TestCase):
             self.assertEqual(self.conf.read_text(), "old ssh config\n")
             with self.assertRaises(ValueError):
                 ssh_access.commit()
+
+    def test_temporary_password_rule_removed_only_after_verified_commit(self):
+        dropin = self.root / "enrollment.conf"
+        dropin.write_text(ssh_access.ENROLLMENT_MARKER + "\nPermitRootLogin yes\n")
+        with patch.object(ssh_access, "run", return_value=""):
+            ssh_access.harden(self.descriptor)
+            ssh_access.rollback()
+            self.assertTrue(dropin.exists())
+            ssh_access.harden(self.descriptor)
+            ssh_access.commit()
+            self.assertFalse(dropin.exists())
+
+    def test_commit_preserves_unrelated_enrollment_file(self):
+        dropin = self.root / "enrollment.conf"
+        dropin.write_text("# User-managed settings\nPermitRootLogin no\n")
+        with patch.object(ssh_access, "run", return_value=""):
+            ssh_access.harden(self.descriptor)
+            ssh_access.commit()
+            self.assertTrue(dropin.exists())
 
 
 if __name__ == "__main__":

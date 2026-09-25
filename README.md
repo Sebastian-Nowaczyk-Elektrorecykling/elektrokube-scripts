@@ -55,27 +55,96 @@ dedicated controllers needs a worker/hybrid for ordinary applications.
 - Review `config/cluster.json`. Pod `10.42.0.0/16` and service `10.43.0.0/16`
   networks must not overlap your LAN, VPNs, routes, or each other. `api_address`
   defaults to the first node's detected/selected address. Bootstrap requires them to match.
-- On each **new node**, install/start `openssh-server` and have an existing
-  account able to log in with a password and run unrestricted `sudo` (or use an
-  already enabled root login). Passwordless sudo is supported but not required.
-  An account's local password remains usable at the console and for sudo.
+- On each **new node**, install/start `openssh-server`. You can enroll as **root
+  without sudo**, or use a normal account with unrestricted sudo access. The
+  initial SSH login must work first; a password working at the console is not
+  sufficient. Debian disables root SSH password login by default; follow the
+  root-console steps below. Passwordless sudo is supported for non-root accounts.
 - Keep console access for initial provisioning, firmware/MOK enrollment, and
   recovery. These scripts change power settings, disable swap, and replace the
   SSH policy on new nodes. They never format disks or reboot automatically.
 
-Example prerequisites on a new node, from its console:
+### Root enrollment without sudo
+
+For a freshly installed node with a working local root password, log in at the
+**new node's console as root**. These commands do not use or require sudo.
+Replace `192.168.2.153` with the **first node's actual LAN source IPv4**:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y openssh-server sudo
-sudo systemctl enable --now ssh
-# Ensure the account you will supply to add-node.sh has sudo access.
+apt-get update
+apt-get install -y openssh-server
+systemctl enable --now ssh
+
+FIRST_NODE_IP=192.168.2.153
+install -d -m 0755 /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-elektrokube-enrollment.conf <<EOF
+# elektrokube: temporary root enrollment
+PermitRootLogin yes
+PasswordAuthentication yes
+PubkeyAuthentication yes
+AuthenticationMethods any
+AllowUsers root@$FIRST_NODE_IP
+EOF
+/usr/sbin/sshd -t && systemctl reload ssh
+
+# Check the effective policy for a connection from the first node:
+/usr/sbin/sshd -T -C "user=root,host=first-node,addr=$FIRST_NODE_IP" \
+  | grep -E '^(permitrootlogin|passwordauthentication|pubkeyauthentication|authenticationmethods|allowusers) '
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-Use the fingerprint shown at the console when `add-node.sh` asks you to verify
-the host. If Debian was installed without sudo, perform these steps as root
-and grant the chosen account sudo access before enrollment.
+The effective values must include `permitrootlogin yes`,
+`passwordauthentication yes`, `pubkeyauthentication yes`,
+`authenticationmethods any`, and `allowusers root@YOUR_FIRST_NODE_IP`. Debian's
+stock configuration includes `.conf` files from this directory before its main
+settings. If the output differs, inspect earlier drop-ins, Match/Allow/Deny rules,
+or a previously managed configuration; do not assume the new file took effect.
+This temporary policy limits successful SSH logins to root from the first node.
+It also prevents other accounts from logging in during initial enrollment.
+
+On a multi-interface first node, `ip -4 route get NEW_NODE_IP` shows the `src`
+address to use above. Use the host fingerprint printed at the new node's console
+when enrollment asks you to verify it. Then, **on the first node**, run:
+
+```bash
+git pull
+sudo ./add-node.sh --host 192.168.2.154 --user root --role worker
+# If already root on the first node, omit sudo.
+```
+
+Successful enrollment switches SSH to source-restricted key-only login and
+removes the temporary file with the exact marker shown above. Password access
+is needed only for that initial connection. If you abandon enrollment, remove
+the temporary file from the new node's console and reload SSH:
+
+```bash
+rm /etc/ssh/sshd_config.d/00-elektrokube-enrollment.conf
+/usr/sbin/sshd -t && systemctl reload ssh
+```
+
+If you have already enrolled the node, password rejection is expected: use its
+saved first-node key and the original source IP. Do not reopen password login
+on a successfully enrolled node just to test it. Root's local console password
+is not changed by these scripts.
+
+For **non-root enrollment**, the new node additionally needs `sudo` installed
+and the selected user must have sudo privileges. `add-node.sh` never invokes
+sudo remotely when `--user root` is selected.
+
+### Connection troubleshooting
+
+| Error | What to check on the new node's root console |
+| --- | --- |
+| Connection refused / no host key returned | Correct node IP and SSH port; `systemctl status ssh`; install/start `openssh-server` |
+| Timeout / no route | Network connection, chosen source IP, routing and firewall; this is before password authentication |
+| Permission denied | `sshd -T -C ...` for the actual user/source; root password policy, account restrictions and password |
+| Changed host key | Compare the fingerprint at the console before updating the first node's saved trust entry |
+
+For the actual reason behind an authentication rejection, run
+`journalctl -u ssh -n 50 --no-pager` on the new node immediately after the attempt.
+The enrollment script distinguishes a transport failure from a rejected login
+and explains the root-password policy. A failed first key probe is normal on a
+fresh node and is handled before the password prompt.
 
 ## First node: hybrid + GNOME administration workstation
 
@@ -423,6 +492,7 @@ GPU, storage, or VM acceptance tests.
 
 ## Upstream references
 
+- [Debian 13 SSH server configuration and root-login defaults](https://manpages.debian.org/trixie/openssh-server/sshd_config.5.en.html)
 - [Cilium on k3s](https://docs.cilium.io/en/stable/installation/k3s/)
 - [Cilium kube-proxy replacement](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/)
 - [Cilium/Kubernetes compatibility](https://docs.cilium.io/en/stable/network/kubernetes/compatibility/)

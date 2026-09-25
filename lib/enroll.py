@@ -41,6 +41,47 @@ def fingerprint(key):
     return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
 
 
+def ssh_error(result, user, source):
+    detail = (result.stderr or b"").decode(errors="replace").strip()
+    lower = detail.lower()
+    if "permission denied" in lower or result.returncode == 5:
+        hint = "SSH authentication was rejected; this does not prove the password is wrong."
+        if user == "root":
+            hint += (" Debian 13 normally disables root SSH password login even when the console password works."
+                     " Root enrollment needs no sudo. On the NEW NODE's root console, follow README.md's"
+                     " 'Root enrollment without sudo' steps to allow temporary access from " + source + "."
+                     " If this node was already enrolled, use its saved key and the original first-node IP instead.")
+        else:
+            hint += " Check the account's password and the server's SSH authentication policy at its console."
+    elif "connection refused" in lower:
+        hint = "The SSH port refused the connection. Check the address/port and enable openssh-server on the new node."
+    elif any(s in lower for s in ("timed out", "no route to host", "network is unreachable")):
+        hint = "SSH could not reach the node. Check its LAN address, routing and firewall before changing passwords."
+    elif "host key verification failed" in lower or "host identification has changed" in lower:
+        hint = "The SSH host key differs from the saved key. Verify its fingerprint at the new node's console."
+    else:
+        hint = f"SSH connection failed (exit {result.returncode}). Inspect the SSH error and the new node's ssh journal."
+    return hint + ("\n" + detail if detail else "")
+
+
+def authenticate(conn):
+    """Try the saved key first; request a password only after an authentication refusal."""
+    command = 'printf "%s\\n" "$SSH_CONNECTION"'
+    result = conn.call(command, capture_error=True, check=False)
+    if result.returncode == 0:
+        return True, result.stdout
+    if b"permission denied" not in (result.stderr or b"").lower():
+        raise RuntimeError(ssh_error(result, conn.a.user, conn.source))
+    print("No usable enrolled key yet; trying the initial SSH password login.", flush=True)
+    if conn.a.user == "root":
+        print("Root SSH must allow the initial password login; sudo is not needed on the new node.", flush=True)
+    conn.login_password = getpass.getpass("New node SSH password (not saved): ")
+    result = conn.call(command, password=True, capture_error=True, check=False)
+    if result.returncode:
+        raise RuntimeError(ssh_error(result, conn.a.user, conn.source))
+    return False, result.stdout
+
+
 class Connection:
     def __init__(self, a, source, key, known):
         self.a, self.source, self.key = a, source, key
@@ -53,7 +94,7 @@ class Connection:
                      "-o", "ControlMaster=no", "-o", "ControlPath=none",
                      "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none"]
 
-    def call(self, command, *, password=False, root=False, data=None, capture=True, check=True):
+    def call(self, command, *, password=False, root=False, data=None, capture=True, capture_error=False, check=True):
         argv = list(self.base)
         if password:
             argv += ["-o", "PubkeyAuthentication=no", "-o", "PreferredAuthentications=password,keyboard-interactive"]
@@ -77,7 +118,7 @@ class Connection:
             fds = (read_fd,)
         try:
             result = subprocess.run(argv, input=data, stdout=subprocess.PIPE if capture else None,
-                                    stderr=None, pass_fds=fds)
+                                    stderr=subprocess.PIPE if capture_error else None, pass_fds=fds)
         finally:
             for fd in fds:
                 os.close(fd)
@@ -92,8 +133,13 @@ def pin_host(a, known):
                 fingerprint(line) for line in known.read_text().splitlines() if line and not line.startswith("#")}:
             raise ValueError("Supplied fingerprint differs from the previously pinned host key")
         return
-    scan = run(["ssh-keyscan", "-4", "-T", "5", "-t", "ed25519", "-p", str(a.port), a.host],
-               capture_output=True, text=True).stdout.strip()
+    scanned = subprocess.run(["ssh-keyscan", "-4", "-T", "5", "-t", "ed25519", "-p", str(a.port), a.host],
+                             capture_output=True, text=True)
+    if scanned.returncode:
+        raise RuntimeError(f"Cannot read an SSH host key from {a.host}:{a.port}. Check its IP/port and that"
+                           " openssh-server is running (systemctl enable --now ssh at the new node's root console)."
+                           " This check does not use a password.\n" + scanned.stderr.strip())
+    scan = scanned.stdout.strip()
     lines = [x for x in scan.splitlines() if x and not x.startswith("#")]
     if len(lines) != 1 or lines[0].split()[1] != "ssh-ed25519":
         raise RuntimeError("Expected exactly one Ed25519 host key")
@@ -168,15 +214,13 @@ def main():
     key.chmod(0o600)
     public = Path(str(key) + ".pub").read_text().strip()
     conn = Connection(a, source, key, known)
-    key_works = conn.call("true", check=False).returncode == 0
-    if not key_works:
-        conn.login_password = getpass.getpass("New node SSH password (not saved): ")
+    key_works, connection_info = authenticate(conn)
     if a.user != "root":
         if conn.login_password is not None:
             conn.sudo_password = getpass.getpass("sudo password [Enter uses SSH password; NOPASSWD also works]: ") or conn.login_password
         else:
             conn.sudo_password = getpass.getpass("New node sudo password [Enter for NOPASSWD]: ")
-    observed = conn.call('printf "%s\\n" "$SSH_CONNECTION"', password=not key_works).stdout.decode().split()
+    observed = connection_info.decode().split()
     if len(observed) != 4 or observed[0] != source or observed[2] != a.host:
         raise ValueError("Use direct LAN SSH without NAT/proxies; the observed source/destination addresses differ")
     a.node_name = node_name(a.node_name or conn.call("hostname -s", password=not key_works).stdout.decode().strip())

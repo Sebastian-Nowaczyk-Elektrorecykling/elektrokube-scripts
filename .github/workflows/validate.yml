@@ -29,3 +29,26 @@ jobs:
           grep -qx 'kbdinteractiveauthentication no' /tmp/effective.conf
           grep -qx 'authenticationmethods publickey' /tmp/effective.conf
           grep -qx 'allowusers root@192.168.2.153' /tmp/effective.conf
+      - name: Parse temporary root enrollment policy
+        run: |
+          cat > /tmp/elektrokube-enrollment.conf <<'EOF'
+          # elektrokube: temporary root enrollment
+          PermitRootLogin yes
+          PasswordAuthentication yes
+          PubkeyAuthentication yes
+          AuthenticationMethods any
+          AllowUsers root@192.168.2.153
+          EOF
+          cat > /tmp/elektrokube-bootstrap-sshd.conf <<'EOF'
+          Include /tmp/elektrokube-enrollment.conf
+          PermitRootLogin prohibit-password
+          PasswordAuthentication no
+          UsePAM yes
+          EOF
+          sudo /usr/sbin/sshd -t -f /tmp/elektrokube-bootstrap-sshd.conf
+          sudo /usr/sbin/sshd -T -f /tmp/elektrokube-bootstrap-sshd.conf -C user=root,host=first-node,addr=192.168.2.153 > /tmp/bootstrap-effective.conf
+          grep -qx 'permitrootlogin yes' /tmp/bootstrap-effective.conf
+          grep -qx 'passwordauthentication yes' /tmp/bootstrap-effective.conf
+          grep -qx 'pubkeyauthentication yes' /tmp/bootstrap-effective.conf
+          grep -qx 'authenticationmethods any' /tmp/bootstrap-effective.conf
+          grep -qx 'allowusers root@192.168.2.153' /tmp/bootstrap-effective.conf

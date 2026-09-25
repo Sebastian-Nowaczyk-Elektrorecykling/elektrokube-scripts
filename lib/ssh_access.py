@@ -16,6 +16,8 @@ STATE = Path("/etc/elektrokube/ssh")
 SSHD_CONFIG = Path("/etc/ssh/sshd_config")
 UNIT = "elektrokube-ssh-rollback"
 AUTH_KEYS = Path("/etc/ssh/elektrokube/authorized_keys")
+ENROLLMENT_DROPIN = Path("/etc/ssh/sshd_config.d/00-elektrokube-enrollment.conf")
+ENROLLMENT_MARKER = "# elektrokube: temporary root enrollment"
 
 
 def ssh_config(user, source, port):
@@ -121,6 +123,10 @@ def commit():
         raise ValueError("SSH config changed during verification")
     pending.unlink()
     run("systemctl", "stop", state["unit"] + ".timer")
+    # The managed config has no Include. Remove our temporary password exception
+    # only after a new key-only connection was verified; leave unrelated files alone.
+    if ENROLLMENT_DROPIN.is_file() and ENROLLMENT_DROPIN.read_text().startswith(ENROLLMENT_MARKER + "\n"):
+        ENROLLMENT_DROPIN.unlink()
     (STATE / "committed").write_text("Key-only SSH verified from the first node.\n")
 
 
