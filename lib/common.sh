@@ -37,6 +37,19 @@ load_config() {
 }
 download() { curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 "$1" -o "$2"; }
 kube() { /usr/local/bin/k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml "$@"; }
+install_gateway_api() (
+  local_tmp=$(mktemp -d); trap 'rm -rf -- "$local_tmp"' EXIT
+  download "https://github.com/kubernetes-sigs/gateway-api/releases/download/$GATEWAY_API_VERSION/standard-install.yaml" "$local_tmp/gateway-api.yaml"
+  printf '%s  %s\n' "$GATEWAY_API_SHA256" "$local_tmp/gateway-api.yaml" | sha256sum --check --status || die 'Gateway API bundle checksum mismatch.'
+  # Server-side apply handles large CRDs and matches the future Flux field manager.
+  resources=$(kube apply --server-side --field-manager=kustomize-controller -f "$local_tmp/gateway-api.yaml" -o name)
+  while IFS= read -r resource; do
+    case "$resource" in
+      customresourcedefinition.apiextensions.k8s.io/*)
+        kube wait "$resource" --for=condition=Established --timeout=120s ;;
+    esac
+  done <<< "$resources"
+)
 install_helm() (
   if command -v helm >/dev/null && [[ $(helm version --template '{{.Version}}') == "$HELM_VERSION" ]]; then exit; fi
   local_tmp=$(mktemp -d); trap 'rm -rf -- "$local_tmp"' EXIT

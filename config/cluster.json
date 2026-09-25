@@ -7,6 +7,8 @@
   "k3s_version": "v1.36.4+k3s1",
   "k3s_installer_sha256": "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad",
   "cilium_version": "1.20.2",
+  "gateway_api_version": "v1.6.1",
+  "gateway_api_sha256": "24d931f22abd8e40c973264319ead7cfa09d0fb7716b7ab1ee2ff174cb063a73",
   "cilium_cli_version": "v0.20.1",
   "helm_version": "v3.19.0",
   "nvidia_toolkit_version": "1.20.0-1"

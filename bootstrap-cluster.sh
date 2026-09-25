@@ -41,6 +41,8 @@ fi
 install_helm
 install_cilium_cli
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+log "Installing Gateway API $GATEWAY_API_VERSION before Cilium."
+install_gateway_api
 python3 "$REPO_ROOT/lib/config.py" cilium --config /etc/elektrokube/cluster.json > "$tmp/cilium-values.json"
 install -m 0600 "$tmp/cilium-values.json" /etc/elektrokube/cilium-values.json
 helm repo add cilium https://helm.cilium.io --force-update
@@ -50,4 +52,5 @@ helm upgrade --install cilium cilium/cilium --namespace kube-system --version "$
   --values /etc/elektrokube/cilium-values.json --wait --timeout 10m
 kube wait --for=condition=Ready "node/$node_name" --timeout=300s
 cilium status --wait --wait-duration 5m
+kube wait gatewayclass/cilium --for=condition=Accepted --timeout=300s
 log "Cluster bootstrapped at https://$API_ADDRESS:6443. Hubble is available via localhost port-forward."

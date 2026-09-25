@@ -29,6 +29,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.cilium_values(self.c)["k8sServiceHost"], "192.168.2.153")
         self.assertTrue(config.cilium_values(self.c)["kubeProxyReplacement"])
         self.assertEqual(config.cilium_values(self.c)["ipam"]["mode"], "kubernetes")
+        self.assertEqual(config.cilium_values(self.c)["gatewayAPI"],
+                         {"enabled": True, "gatewayClass": {"create": True}})
+        self.assertTrue(config.cilium_values(self.c)["l7Proxy"])
+        self.assertTrue(config.cilium_values(self.c)["envoy"]["enabled"])
 
     def test_server_join_has_matching_critical_configuration(self):
         first = config.node_config(self.c, "hybrid", "192.168.2.153", "first", True)
@@ -58,7 +62,8 @@ class ConfigTests(unittest.TestCase):
                      ("cluster_dns", "1.1.1.1"), ("cluster_dns", "10.43.0.1"),
                      ("api_address", "10.42.1.3"), ("api_address", "127.0.0.1"),
                      ("helm_version", "latest"), ("k3s_version", "v1.36.4+k3s1;id"),
-                     ("k3s_installer_sha256", "bad"), ("cluster_name", "UPPER")]
+                     ("k3s_installer_sha256", "bad"), ("cluster_name", "UPPER"),
+                     ("gateway_api_version", "latest"), ("gateway_api_sha256", "bad")]
         for key, value in mutations:
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 bad = copy.deepcopy(self.c); bad[key] = value

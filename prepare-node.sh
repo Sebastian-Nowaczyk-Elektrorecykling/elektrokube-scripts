@@ -29,6 +29,10 @@ cat > /etc/modules-load.d/elektrokube.conf <<'EOF'
 overlay
 br_netfilter
 vxlan
+xt_TPROXY
+xt_socket
+xt_mark
+xt_CT
 iscsi_tcp
 dm_crypt
 nfs

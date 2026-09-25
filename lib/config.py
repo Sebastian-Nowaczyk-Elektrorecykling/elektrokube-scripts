@@ -26,7 +26,7 @@ def node_name(value):
 
 def validate(c, require_api=True):
     required = {"cluster_name", "api_address", "pod_cidr", "service_cidr", "cluster_dns",
-                "k3s_version", "k3s_installer_sha256", "cilium_version",
+                "k3s_version", "k3s_installer_sha256", "cilium_version", "gateway_api_version", "gateway_api_sha256",
                 "cilium_cli_version", "helm_version", "nvidia_toolkit_version"}
     if set(c) != required or not all(isinstance(v, str) for v in c.values()):
         raise ValueError(f"Configuration requires exactly these string keys: {sorted(required)}")
@@ -48,6 +48,8 @@ def validate(c, require_api=True):
         "k3s_version": r"v1\.\d+\.\d+\+k3s\d+",
         "k3s_installer_sha256": r"[0-9a-f]{64}",
         "cilium_version": r"\d+\.\d+\.\d+",
+        "gateway_api_version": r"v\d+\.\d+\.\d+",
+        "gateway_api_sha256": r"[0-9a-f]{64}",
         "cilium_cli_version": r"v\d+\.\d+\.\d+",
         "helm_version": r"v3\.\d+\.\d+",
         "nvidia_toolkit_version": r"\d+\.\d+\.\d+-\d+",
@@ -96,6 +98,8 @@ def cilium_values(c):
             "k8sServicePort": 6443, "ipam": {"mode": "kubernetes"},
             "routingMode": "tunnel", "tunnelProtocol": "vxlan",
             "bpf": {"masquerade": True},
+            "l7Proxy": True, "envoy": {"enabled": True},
+            "gatewayAPI": {"enabled": True, "gatewayClass": {"create": True}},
             "ipv4": {"enabled": True}, "ipv6": {"enabled": False},
             "operator": {"replicas": 1, "tolerations": tolerate},
             "hubble": {"enabled": True, "relay": {"enabled": True, "tolerations": tolerate},

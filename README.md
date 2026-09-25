@@ -13,8 +13,9 @@ This repository installs host prerequisites, k3s, Cilium, Hubble Relay/UI, and
 local administration tools. After initial provisioning, `gitops-cilium-and-flux.sh`
 installs raw Flux controllers and hands Cilium and Flux management to
 [elektrokube-cilium-and-flux](https://github.com/Sebastian-Nowaczyk-Elektrorecykling/elektrokube-cilium-and-flux).
+Gateway API CRDs and Cilium's Gateway controller are included in fresh clusters.
 Application manifests, Longhorn, KubeVirt, GPU operators/device plugins,
-ingress/Gateway API, LAN DNS, and LoadBalancer address pools belong to later work.
+application Gateways/routes, LAN DNS, and LoadBalancer address pools belong to later work.
 Flux manifests live in the GitOps repository; no GitHub token is needed here.
 
 ## Scripts and roles
@@ -23,7 +24,7 @@ Flux manifests live in the GitOps repository; no GitHub token is needed here.
 | --- | --- |
 | `install.sh` | Prepare the first node, bootstrap a **hybrid** cluster node, and install tools for its GNOME user |
 | `prepare-node.sh` | Host preparation: networking, swap, storage/virtualization/GPU prerequisites, power policy |
-| `bootstrap-cluster.sh` | Bootstrap k3s and Cilium on a prepared first node; `hybrid` or `controller` |
+| `bootstrap-cluster.sh` | Bootstrap k3s, Gateway API CRDs, and Cilium on a prepared first node; `hybrid` or `controller` |
 | `add-node.sh` | Ask for SSH credentials, establish restricted key access, prepare a new node, and join it automatically |
 | `prepare-admin.sh` | Install kubectl access, Helm, Cilium CLI, Headlamp Desktop, completions, and diagnostics |
 | `gitops-cilium-and-flux.sh` | Install raw Flux controllers and hand the existing Cilium release and Flux to their GitOps repository |
@@ -268,6 +269,27 @@ service forwarding and eBPF masquerading, with VXLAN tunneling and Kubernetes
 PodCIDR allocation. CoreDNS and metrics-server remain enabled. There is no
 default storage class until you install a storage provisioner.
 
+### Gateway API for applications
+
+Fresh bootstrap installs the pinned Gateway API **v1.6.1 standard bundle** with
+server-side apply and waits for the CRDs to become Established before installing
+Cilium. The bundle's SHA256 is checked against `config/cluster.json`. It includes
+GatewayClass, Gateway, HTTPRoute, GRPCRoute, TLSRoute, TCPRoute, UDPRoute,
+ReferenceGrant, BackendTLSPolicy, ListenerSet, and the upstream admission policy.
+
+Cilium's Gateway controller, L7 proxy, Envoy, and the `cilium` GatewayClass are
+enabled. Host preparation loads the netfilter modules used for L7 redirection.
+Bootstrap waits for GatewayClass `cilium` to be Accepted. Application Gateways
+can use `spec.gatewayClassName: cilium`; their listeners, routes, TLS secrets,
+and external addressing belong to the application configuration. External access
+requires a LoadBalancer implementation/address pool or an explicit host-network
+Gateway configuration.
+
+After GitOps handoff, the `gateway-api` Flux Kustomization owns the shared CRDs.
+Cilium reconciliation depends on it. Keep the Gateway API version pin in
+`config/cluster.json` aligned with `infrastructure/gateway-api/kustomization.yaml`
+in `elektrokube-cilium-and-flux`.
+
 ## Hand Cilium and Flux to GitOps
 
 After `install.sh` or `bootstrap-cluster.sh` succeeds, run on the **first node**:
@@ -294,11 +316,12 @@ The script applies `infrastructure/flux` directly, waits for the CRDs and four
 controllers, and creates `flux-system/cluster-settings` with `API_IP` and
 `CLUSTER_NAME` from the saved configuration. It then applies
 `clusters/elektrokube/flux-system`, which creates the GitRepository and root
-Kustomization. That repository owns the Flux controllers and adopts Cilium;
+Kustomization. That repository owns the Gateway API CRDs and Flux controllers and adopts Cilium;
 the script never performs a Helm install/upgrade/uninstall of Cilium.
 
 Success requires fresh reconciliation of the fetched revision, including the
-`flux-system`, `flux`, and `cilium` Kustomizations and the Cilium HelmRelease.
+`flux-system`, `flux`, `gateway-api`, and `cilium` Kustomizations, the Cilium
+HelmRelease, and an Accepted `cilium` GatewayClass.
 If interrupted, fix the reported problem and rerun the same command. Completed
 handoffs retain their Git-managed Cilium version/values and Flux controllers;
 the script does not reset them to bootstrap settings. Conflicting cluster
@@ -311,6 +334,7 @@ node-enrollment entry point. Check status with:
 ```bash
 kubectl -n flux-system get gitrepositories,kustomizations
 kubectl -n kube-system get helmrelease cilium
+kubectl get gatewayclass cilium
 ```
 
 ## Add storage to Flux
@@ -603,6 +627,7 @@ Defaults verified against upstream release/documentation references:
 | --- | --- |
 | k3s | `v1.36.4+k3s1` |
 | Cilium | `1.20.2` (its documented Kubernetes range includes 1.36) |
+| Gateway API | `v1.6.1`, standard CRDs and admission policy; SHA256 pinned in configuration |
 | Cilium CLI | `v0.20.1` |
 | Helm | `v3.19.0` |
 | NVIDIA Container Toolkit | `1.20.0-1` |
@@ -647,6 +672,8 @@ GPU, storage, or VM acceptance tests.
 
 - [Debian 13 SSH server configuration and root-login defaults](https://manpages.debian.org/trixie/openssh-server/sshd_config.5.en.html)
 - [Cilium on k3s](https://docs.cilium.io/en/stable/installation/k3s/)
+- [Cilium Gateway API prerequisites](https://docs.cilium.io/en/stable/network/servicemesh/gateway-api/gateway-api/)
+- [Gateway API CRD installation](https://gateway-api.sigs.k8s.io/guides/getting-started/introduction/)
 - [Cilium kube-proxy replacement](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/)
 - [Cilium/Kubernetes compatibility](https://docs.cilium.io/en/stable/network/kubernetes/compatibility/)
 - [k3s embedded etcd](https://docs.k3s.io/datastore/ha-embedded)

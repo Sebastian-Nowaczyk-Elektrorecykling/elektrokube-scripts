@@ -15,6 +15,7 @@ GIT_URL = "https://github.com/Sebastian-Nowaczyk-Elektrorecykling/elektrokube-ci
 BRANCH = "main"
 KUBECONFIG = "/etc/rancher/k3s/k3s.yaml"
 CONTROLLERS = ("source-controller", "kustomize-controller", "helm-controller", "notification-controller")
+KUSTOMIZATIONS = ("flux-system", "flux", "gateway-api", "cilium")
 SOURCE = "gitrepositories.source.toolkit.fluxcd.io"
 SYNC = "kustomizations.kustomize.toolkit.fluxcd.io"
 RELEASE = "helmreleases.helm.toolkit.fluxcd.io"
@@ -150,7 +151,7 @@ def handoff(workdir, config):
 
     crds = set(kube("get", "crds", "-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}").splitlines())
     source = get(SOURCE, "flux-system") if SOURCE in crds else None
-    syncs = {name: get(SYNC, name) if SYNC in crds else None for name in ("flux-system", "flux", "cilium")}
+    syncs = {name: get(SYNC, name) if SYNC in crds else None for name in KUSTOMIZATIONS}
     check_source(source)
     for name, obj in syncs.items():
         check_sync(obj, name)
@@ -230,11 +231,12 @@ def handoff(workdir, config):
     source = reconcile(SOURCE, "flux-system")
     revision = source["status"]["artifact"]["revision"]
     require(revision.rsplit(":", 1)[-1] == commit, "GitOps main changed during handoff; rerun to verify the new revision.")
-    for name in ("flux-system", "flux", "cilium"):
+    for name in KUSTOMIZATIONS:
         reconcile(SYNC, name, revision=revision)
     reconcile(RELEASE, "cilium", "kube-system")
     kube("-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=300s")
-    log(f"Flux now owns Cilium and its own controllers at {revision}.")
+    kube("wait", "gatewayclass/cilium", "--for=condition=Accepted", "--timeout=300s")
+    log(f"Flux now owns Gateway API CRDs, Cilium and its own controllers at {revision}.")
     log("Use Git for future Cilium/Flux changes. Do not rerun bootstrap-cluster.sh to change Cilium.")
 
 

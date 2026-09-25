@@ -35,7 +35,7 @@ class Cluster:
         self.syncs = {name: obj("Kustomization", name, {
             "path": "./clusters/elektrokube" if name == "flux-system" else f"./infrastructure/{name}",
             "sourceRef": {"kind": "GitRepository", "name": "flux-system"}})
-            for name in ("flux-system", "flux", "cilium")}
+            for name in ("flux-system", "flux", "gateway-api", "cilium")}
         self.flux = [obj("Deployment", name) for name in gitops.CONTROLLERS]
         self.flux += [obj("CustomResourceDefinition", name) for name in (gitops.SOURCE, gitops.SYNC, gitops.RELEASE)]
         self.release = obj("HelmRelease", "cilium", {
@@ -109,7 +109,7 @@ class Cluster:
                     "conditions": [{"type": "Ready", "status": "True"}],
                     "artifact": {"revision": self.revision}, "lastAppliedRevision": self.revision}
                 if resource == gitops.SYNC and name == "flux-system":
-                    for child in ("flux", "cilium"):
+                    for child in ("flux", "gateway-api", "cilium"):
                         self.objects.setdefault((gitops.SYNC, ns, child), copy.deepcopy(self.syncs[child]))
                 if resource == gitops.SYNC and name == "flux":
                     for controller in gitops.CONTROLLERS:
@@ -150,7 +150,8 @@ class HandoffTests(unittest.TestCase):
         cm = self.cluster.objects[("configmap", "flux-system", "cluster-settings")]
         self.assertEqual(cm["data"], {"API_IP": "192.168.2.153", "CLUSTER_NAME": "elektrokube"})
         reconciles = [call[4] for call in self.cluster.calls if "annotate" in call]
-        self.assertEqual(reconciles, ["flux-system", "flux-system", "flux", "cilium", "cilium"])
+        self.assertEqual(reconciles, ["flux-system", "flux-system", "flux", "gateway-api", "cilium", "cilium"])
+        self.assertIn(("wait", "gatewayclass/cilium", "--for=condition=Accepted", "--timeout=300s"), self.cluster.calls)
         self.assertTrue(all(c[1] in ("list", "get") for c in self.cluster.calls if c[0] == "helm"))
 
     def test_refuses_changed_live_values_before_cluster_writes(self):
