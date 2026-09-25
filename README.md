@@ -313,6 +313,42 @@ kubectl -n flux-system get gitrepositories,kustomizations
 kubectl -n kube-system get helmrelease cilium
 ```
 
+## Add storage to Flux
+
+After completing the Cilium/Flux handoff above, run on the **original first node**:
+
+```bash
+git pull
+sudo ./gitops-storage.sh
+# If already root, omit sudo.
+```
+
+This registers [elektrokube-storage](https://github.com/Sebastian-Nowaczyk-Elektrorecykling/elektrokube-storage)
+as a separate Flux GitRepository and root Kustomization in `flux-system`.
+Flux installs Longhorn, the CloudNativePG operator, Garage, and a native admission
+policy that defaults unspecified CNPG data/WAL storage to `longhorn-cnpg`.
+Explicit class choices, including PVC-template classes, are preserved.
+
+Longhorn classes match the storage reference: `longhorn` (the sole Kubernetes
+default), `longhorn-cnpg`, and `longhorn-garage` use one replica;
+`longhorn-replicated` uses three and needs three eligible storage nodes.
+Garage uses its dedicated class for metadata and data, with a single-node layout.
+Database instances, backups and S3 buckets/credentials are configured separately.
+
+The command follows the existing handoff's root/first-node checks and always uses
+`/etc/rancher/k3s/k3s.yaml`. It requires existing Flux and the ready base `cilium`
+Kustomization. It checks the stable MutatingAdmissionPolicy API (Kubernetes
+1.36+), conflicting storage ownership, and other default classes before writes.
+It never installs/reinstalls Flux, invokes Helm to install storage, writes to
+Git, or requires the Flux CLI or a GitHub token. It installs Debian's
+`python3-yaml` only when needed.
+
+Success requires fresh reconciliation of the fetched revision and every storage
+child. Fix a reported error and rerun to resume; existing Git-managed settings
+and intentionally suspended reconciliation are preserved. See the storage
+repository README for Longhorn host prerequisites, admission behavior on existing
+databases, data retention, access commands and application dependencies.
+
 ## Add a new node from the first node
 
 ```bash
