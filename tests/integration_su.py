@@ -35,7 +35,9 @@ def main():
     subprocess.run(["useradd", "--create-home", "--shell", "/bin/bash", "enroller"], check=True)
     subprocess.run(["chpasswd"], input=f"enroller:{login_password}\nroot:{root_password}\n".encode(), check=True)
     Path("/run/sshd").mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="su-integration-") as directory:
+    # Keep the key directory beneath root-owned /run: OpenSSH StrictModes
+    # correctly rejects authorized_keys paths with a world-writable /tmp parent.
+    with tempfile.TemporaryDirectory(prefix="su-integration-", dir="/run") as directory:
         tmp = Path(directory)
         # sshd reads public keys as the authenticating user; private keys stay 0600.
         tmp.chmod(0o755)
@@ -128,6 +130,10 @@ def main():
                 for value in (result.stdout, result.stderr, failed.stdout, failed.stderr, log_path.read_bytes()):
                     assert login_password.encode() not in value and root_password.encode() not in value
                 print("PASS: Debian 13 normal-user SSH + su, no sudo, password isolation, failure status, key-only SSH")
+            except BaseException:
+                print(log_path.read_text().replace(login_password, "[redacted]").replace(root_password, "[redacted]"),
+                      file=sys.stderr)
+                raise
             finally:
                 daemon.terminate()
                 daemon.wait(timeout=10)
