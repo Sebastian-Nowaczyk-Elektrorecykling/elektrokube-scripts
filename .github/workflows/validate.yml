@@ -1,0 +1,31 @@
+name: Validate provisioning
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validators
+        run: sudo apt-get update && sudo apt-get install -y shellcheck openssh-server
+      - name: Shell and safety tests
+        run: bash tests/check.sh
+      - name: Parse generated SSH policy with OpenSSH
+        run: |
+          python3 - <<'PY' > /tmp/elektrokube-sshd.conf
+          import sys
+          sys.path.insert(0, 'lib')
+          from ssh_access import ssh_config
+          print(ssh_config('root', '192.168.2.153', 2222))
+          PY
+          sudo mkdir -p /run/sshd
+          sudo ssh-keygen -A
+          sudo /usr/sbin/sshd -t -f /tmp/elektrokube-sshd.conf
+          sudo /usr/sbin/sshd -T -f /tmp/elektrokube-sshd.conf -C user=root,host=node,addr=192.168.2.153 > /tmp/effective.conf
+          grep -qx 'passwordauthentication no' /tmp/effective.conf
+          grep -qx 'kbdinteractiveauthentication no' /tmp/effective.conf
+          grep -qx 'authenticationmethods publickey' /tmp/effective.conf
+          grep -qx 'allowusers root@192.168.2.153' /tmp/effective.conf

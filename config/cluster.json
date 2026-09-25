@@ -1,0 +1,13 @@
+{
+  "cluster_name": "elektrokube",
+  "api_address": "",
+  "pod_cidr": "10.42.0.0/16",
+  "service_cidr": "10.43.0.0/16",
+  "cluster_dns": "10.43.0.10",
+  "k3s_version": "v1.36.4+k3s1",
+  "k3s_installer_sha256": "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad",
+  "cilium_version": "1.20.2",
+  "cilium_cli_version": "v0.20.1",
+  "helm_version": "v3.19.0",
+  "nvidia_toolkit_version": "1.20.0-1"
+}
