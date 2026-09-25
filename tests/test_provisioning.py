@@ -105,7 +105,7 @@ class SSHTests(unittest.TestCase):
                 ssh_access.ssh_config(bad, "192.168.2.153", 22)
 
     def test_passwords_never_in_argv_or_environment(self):
-        a = argparse.Namespace(host="192.168.2.154", port=22, user="admin")
+        a = argparse.Namespace(host="192.168.2.154", port=22, user="admin", elevate="sudo")
         c = enroll.Connection(a, "192.168.2.153", Path("key"), Path("known"))
         c.login_password = "private-login-password"
         c.sudo_password = "private-sudo-password"
@@ -122,6 +122,70 @@ class SSHTests(unittest.TestCase):
         with patch.object(enroll.subprocess, "run", side_effect=fake_run):
             c.call("/usr/bin/true", password=True, root=True)
         self.assertEqual(len(seen), 1)
+
+    def test_su_password_uses_stdin_without_a_terminal_or_sudo(self):
+        a = argparse.Namespace(host="192.168.2.154", port=22, user="admin")
+        c = enroll.Connection(a, "192.168.2.153", Path("key"), Path("known"))
+        c.login_password = "login-secret"
+        c.root_password = "root-secret-'$\\!"
+        def fake_run(argv, **kwargs):
+            self.assertNotIn(c.root_password, " ".join(argv))
+            self.assertNotIn(c.login_password, " ".join(argv))
+            self.assertNotIn("env", kwargs)
+            self.assertNotIn("sudo", argv[-1])
+            self.assertIn("-T", argv)
+            self.assertIn("su --login --shell /bin/bash --command", argv[-1])
+            self.assertIn("</dev/null", argv[-1])
+            self.assertEqual(os.read(kwargs["pass_fds"][0], 4096), b"login-secret\n")
+            self.assertEqual(kwargs["input"], (c.root_password + "\n").encode())
+            return subprocess.CompletedProcess(argv, 0, b"0\n", b"Password: diagnostic\n")
+        with patch.object(enroll.subprocess, "run", side_effect=fake_run):
+            result = c.call("/usr/bin/id -u", password=True, root=True, capture_error=True)
+        self.assertEqual(result.stdout, b"0\n")
+        self.assertEqual(result.stderr, b"diagnostic\n")
+        with self.assertRaisesRegex(ValueError, "input payload"):
+            c.call("/bin/cat", root=True, data=b"payload")
+
+    def test_su_preflight_uses_root_password_and_rejects_bad_credentials_before_mutations(self):
+        for status, output in ((0, b"0\n"), (1, b""), (0, b"1000\n")):
+            with self.subTest(status=status, output=output):
+                conn = Mock(a=argparse.Namespace(user="debian"), elevation="su", login_password="user-secret")
+                conn.call.side_effect = [subprocess.CompletedProcess([], 0, b"/usr/bin/su\n", b""),
+                                         subprocess.CompletedProcess([], status, output, b"")]
+                with patch.object(enroll.getpass, "getpass", return_value="root-secret") as prompt:
+                    if status == 0 and output == b"0\n":
+                        enroll.configure_elevation(conn, password=True)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "Root access through su failed"):
+                            enroll.configure_elevation(conn, password=True)
+                self.assertEqual(conn.root_password, "root-secret")
+                prompt.assert_called_once()
+                self.assertEqual([call.args[0] for call in conn.call.call_args_list],
+                                 ["command -v su", "/usr/bin/id -u"])
+                self.assertTrue(conn.call.call_args.kwargs["root"])
+
+    def test_explicit_sudo_still_supports_reusing_login_password(self):
+        conn = Mock(a=argparse.Namespace(user="debian"), elevation="sudo", login_password="user-secret")
+        conn.call.side_effect = [subprocess.CompletedProcess([], 0, b"/usr/bin/sudo\n", b""),
+                                 subprocess.CompletedProcess([], 0, b"0\n", b"")]
+        with patch.object(enroll.getpass, "getpass", return_value=""):
+            enroll.configure_elevation(conn, password=True)
+        self.assertEqual(conn.sudo_password, "user-secret")
+
+    def test_root_login_never_prompts_for_elevation(self):
+        conn = Mock(a=argparse.Namespace(user="root"))
+        with patch.object(enroll.getpass, "getpass") as prompt:
+            enroll.configure_elevation(conn, password=True)
+        prompt.assert_not_called()
+        conn.call.assert_not_called()
+
+    def test_missing_sudo_recommends_su_before_prompting(self):
+        conn = Mock(a=argparse.Namespace(user="debian"), elevation="sudo")
+        conn.call.return_value = subprocess.CompletedProcess([], 1, b"", b"")
+        with patch.object(enroll.getpass, "getpass") as prompt:
+            with self.assertRaisesRegex(RuntimeError, "--elevate su"):
+                enroll.configure_elevation(conn, password=True)
+        prompt.assert_not_called()
 
     def test_keys_are_source_restricted_and_key_checks_use_new_connections(self):
         line = enroll.key_line("192.168.2.153", "ssh-ed25519 AAAA test")

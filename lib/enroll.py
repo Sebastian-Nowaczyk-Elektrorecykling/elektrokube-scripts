@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -48,6 +49,7 @@ def ssh_error(result, user, source):
         hint = "SSH authentication was rejected; this does not prove the password is wrong."
         if user == "root":
             hint += (" Debian 13 normally disables root SSH password login even when the console password works."
+                     " Prefer --user YOUR_NORMAL_USER: enrollment uses su with the root password by default."
                      " Root enrollment needs no sudo. On the NEW NODE's root console, follow README.md's"
                      " 'Root enrollment without sudo' steps to allow temporary access from " + source + "."
                      " If this node was already enrolled, use its saved key and the original first-node IP instead.")
@@ -82,11 +84,39 @@ def authenticate(conn):
     return False, result.stdout
 
 
+def configure_elevation(conn, *, password):
+    """Authenticate root access before installing keys or changing the target."""
+    if conn.a.user == "root":
+        return
+    method = conn.elevation
+    available = conn.call("command -v " + method, password=password, capture_error=True, check=False)
+    if available.returncode:
+        alternative = "Use the default --elevate su instead." if method == "sudo" else "The Debian su command is missing."
+        raise RuntimeError(f"{method} is unavailable on the new node. {alternative}")
+    if method == "su":
+        conn.root_password = getpass.getpass("New node ROOT password for su (not the SSH user's password): ")
+        if not conn.root_password:
+            raise ValueError("su requires the new node's root password; use --elevate sudo for a sudo-only account")
+    elif conn.login_password is not None:
+        conn.sudo_password = getpass.getpass("sudo password [Enter uses SSH password; NOPASSWD also works]: ") or conn.login_password
+    else:
+        conn.sudo_password = getpass.getpass("New node sudo password [Enter for NOPASSWD]: ")
+    probe = conn.call("/usr/bin/id -u", password=password, root=True, capture_error=True, check=False)
+    if probe.returncode or probe.stdout.strip() != b"0":
+        hint = ("Supply the NEW NODE's root password, and check that its root account permits su."
+                if method == "su" else "Check the user's sudo password and unrestricted sudo privileges.")
+        detail = (probe.stderr or b"").decode(errors="replace").strip()
+        raise RuntimeError(f"Root access through {method} failed. {hint}" + ("\n" + detail if detail else ""))
+    print(f"Verified root access through {method}; remaining steps use it automatically.", flush=True)
+
+
 class Connection:
     def __init__(self, a, source, key, known):
         self.a, self.source, self.key = a, source, key
         self.login_password = None
         self.sudo_password = None
+        self.root_password = None
+        self.elevation = getattr(a, "elevate", "su")
         self.base = ["ssh", "-4", "-p", str(a.port), "-b", source,
                      "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known}",
                      "-o", "GlobalKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
@@ -95,15 +125,28 @@ class Connection:
                      "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none"]
 
     def call(self, command, *, password=False, root=False, data=None, capture=True, capture_error=False, check=True):
-        argv = list(self.base)
+        # PAM reads the password from a pipe. Never allocate a terminal, even if
+        # the local SSH config requests one: a terminal could echo queued input.
+        argv = list(self.base) + ["-T"]
         if password:
             argv += ["-o", "PubkeyAuthentication=no", "-o", "PreferredAuthentications=password,keyboard-interactive"]
         else:
             argv += ["-i", str(self.key), "-o", "BatchMode=yes", "-o", "PreferredAuthentications=publickey"]
+        using_su = root and self.a.user != "root" and self.elevation == "su"
         if root and self.a.user != "root":
-            # Only sudo consumes this stream; the actual command sees /dev/null.
-            command = "sudo -S -p '' -- /bin/bash -c " + shlex.quote("exec " + command + " </dev/null")
-            data = ((self.sudo_password or "") + "\n").encode()
+            if data is not None:
+                raise ValueError("Elevated commands cannot also consume an input payload")
+            # Only the elevation program consumes this stream; the actual
+            # command sees /dev/null, even if PAM/sudo does not request a password.
+            script = shlex.quote("exec " + command + " </dev/null")
+            if using_su:
+                if self.root_password is None:
+                    raise ValueError("Root password for su has not been supplied")
+                command = "LC_ALL=C /usr/bin/su --login --shell /bin/bash --command " + script + " root"
+                data = (self.root_password + "\n").encode()
+            else:
+                command = "sudo -S -p '' -- /bin/bash -c " + script
+                data = ((self.sudo_password or "") + "\n").encode()
         argv += [f"{self.a.user}@{self.a.host}", command]
         fds = ()
         if password:
@@ -118,10 +161,18 @@ class Connection:
             fds = (read_fd,)
         try:
             result = subprocess.run(argv, input=data, stdout=subprocess.PIPE if capture else None,
-                                    stderr=subprocess.PIPE if capture_error else None, pass_fds=fds)
+                                    stderr=subprocess.PIPE if capture_error or using_su else None, pass_fds=fds)
         finally:
             for fd in fds:
                 os.close(fd)
+        if using_su:
+            # su's PAM prompt is automatic, not a request for more user input.
+            # Provisioning stdout streams live; relay any captured stderr once
+            # the command ends, without suppressing authentication diagnostics.
+            result.stderr = re.sub(rb"\APassword: ?", b"", result.stderr or b"", count=1)
+            if not capture_error and result.stderr:
+                sys.stderr.buffer.write(result.stderr)
+                sys.stderr.buffer.flush()
         if check and result.returncode:
             raise RuntimeError(f"Remote SSH step failed (exit {result.returncode})")
         return result
@@ -178,7 +229,9 @@ def kube(*args, check=True):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--host", required=True, type=ipv4, help="New node's reserved/static LAN IPv4 (also its k3s node IP)")
-    p.add_argument("--user", help="Existing SSH account with root or unrestricted sudo access; prompts if omitted")
+    p.add_argument("--user", help="Existing SSH account; prompts if omitted. Normal users use su by default")
+    p.add_argument("--elevate", choices=["su", "sudo"], default="su",
+                   help="Root access for a normal SSH user: su (default, root password) or sudo (user's sudo privileges)")
     p.add_argument("--port", type=int, default=22)
     p.add_argument("--role", choices=["worker", "controller", "hybrid"], default="worker")
     p.add_argument("--node-name", help="Defaults to the new node's short hostname")
@@ -187,7 +240,7 @@ def main():
     p.add_argument("--host-key-fingerprint", help="Preverified SHA256 fingerprint; otherwise compare interactively")
     a = p.parse_args()
     if os.geteuid() != 0:
-        p.error("Run add-node.sh with sudo on the first node")
+        p.error("Run add-node.sh as root (or with sudo) on the first node")
     os.umask(0o077)
     c = load(STATE / "cluster.json")
     identity = (STATE / "node-identity").read_text().strip().split(":")
@@ -215,14 +268,10 @@ def main():
     public = Path(str(key) + ".pub").read_text().strip()
     conn = Connection(a, source, key, known)
     key_works, connection_info = authenticate(conn)
-    if a.user != "root":
-        if conn.login_password is not None:
-            conn.sudo_password = getpass.getpass("sudo password [Enter uses SSH password; NOPASSWD also works]: ") or conn.login_password
-        else:
-            conn.sudo_password = getpass.getpass("New node sudo password [Enter for NOPASSWD]: ")
     observed = connection_info.decode().split()
     if len(observed) != 4 or observed[0] != source or observed[2] != a.host:
         raise ValueError("Use direct LAN SSH without NAT/proxies; the observed source/destination addresses differ")
+    configure_elevation(conn, password=not key_works)
     a.node_name = node_name(a.node_name or conn.call("hostname -s", password=not key_works).stdout.decode().strip())
     node_config(c, a.role, a.host, a.node_name)  # Validate IP/CIDR conflicts before mutations.
     old_node = kube("get", "node", a.node_name, "--ignore-not-found", "-o", "name").stdout.strip()
@@ -252,7 +301,7 @@ chmod 0600 "$user_home/.ssh/authorized_keys"
     print("Verified the new key. Copying scripts and applying transactional SSH restrictions.", flush=True)
     descriptor = {"host": a.host, "user": a.user, "port": a.port, "source_ip": source,
                   "public_key": public, "node_name": a.node_name, "role": a.role,
-                  "gpu": a.gpu, "iommu": a.enable_iommu}
+                  "gpu": a.gpu, "iommu": a.enable_iommu, "elevate": conn.elevation}
     token_path = Path("/var/lib/rancher/k3s/server/agent-token" if a.role == "worker" else "/var/lib/rancher/k3s/server/token")
     token = token_path.read_bytes()
     if not token.strip():
@@ -301,6 +350,7 @@ touch /opt/elektrokube-scripts/.managed
     print("Key-only SSH restricted to the first node is verified. Preparing and joining the node.", flush=True)
     conn.call("/opt/elektrokube-scripts/lib/provision-remote.sh", root=True, capture=False)
     conn.sudo_password = None
+    conn.root_password = None
     for _ in range(120):
         if kube("get", "node", a.node_name, check=False).returncode == 0:
             break
@@ -311,6 +361,8 @@ touch /opt/elektrokube-scripts/.managed
          "-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=300s"])
     print(f"Added {a.node_name} as {a.role}. SSH key: {key}")
     print("Manual SSH (run with sudo on this first node):\n" + shlex.join(conn.base + ["-i", str(key), f"{a.user}@{a.host}"]))
+    if a.user != "root":
+        print("Inside that SSH session, use " + ("su -" if conn.elevation == "su" else "sudo -i") + " for root administration.")
     print("No automatic reboot was performed. Check the GPU/virtualization report and README acceptance steps.")
 
 

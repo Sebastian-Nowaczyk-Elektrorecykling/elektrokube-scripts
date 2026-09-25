@@ -55,16 +55,71 @@ dedicated controllers needs a worker/hybrid for ordinary applications.
 - Review `config/cluster.json`. Pod `10.42.0.0/16` and service `10.43.0.0/16`
   networks must not overlap your LAN, VPNs, routes, or each other. `api_address`
   defaults to the first node's detected/selected address. Bootstrap requires them to match.
-- On each **new node**, install/start `openssh-server`. You can enroll as **root
-  without sudo**, or use a normal account with unrestricted sudo access. The
-  initial SSH login must work first; a password working at the console is not
-  sufficient. Debian disables root SSH password login by default; follow the
-  root-console steps below. Passwordless sudo is supported for non-root accounts.
+- On each **new node**, install/start `openssh-server`. The recommended path is
+  **normal-user SSH plus `su`**, using the normal user's password for SSH and
+  the root password for administration. No sudo or root SSH access is required
+  on the new node. Both passwords are entered on the **first node**.
+  Alternatively select `--elevate sudo` for an account with unrestricted sudo
+  privileges, or enroll directly as root if root SSH already works.
 - Keep console access for initial provisioning, firmware/MOK enrollment, and
   recovery. These scripts change power settings, disable swap, and replace the
   SSH policy on new nodes. They never format disks or reboot automatically.
 
-### Root enrollment without sudo
+### Normal-user enrollment with su: minimum console setup
+
+During Debian installation, create a normal user, set a root password, and
+select **SSH server**. If you can already SSH into that normal account, there
+are **no SSH configuration changes or sudo installation steps** at the new node.
+Direct root SSH can remain disabled. Root's local password is used by `su`
+inside the normal user's SSH connection.
+
+If the SSH server was omitted, the only installation command needed at the
+**new node's root console** is:
+
+```bash
+apt-get update && apt-get install -y openssh-server && systemctl enable --now ssh
+```
+
+If you are logged in locally as the normal user, run `su -` first and enter the
+root password. To verify the SSH host key, display its fingerprint at that
+console (this command also works as a normal user):
+
+```bash
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+Then run **on the first node**, replacing the address and username:
+
+```bash
+git pull
+sudo ./add-node.sh --host 192.168.2.154 --user debian
+# If already root on the first node, omit sudo.
+```
+
+Confirm the host fingerprint, enter the **normal user's SSH password**, then
+the **new node's root password**. All prompts and remaining work run on the
+first node. `su` is the default; `--elevate su` may be supplied explicitly.
+The default role is worker; add `--role controller` or `--role hybrid` as needed.
+
+Enrollment checks root access, installs a key for the normal user, switches
+SSH to key-only access from the first node, and provisions the node. Root SSH
+stays disabled. For later administration, connect using the printed SSH
+command and run `su -` inside the session. The root password is not changed.
+Resuming the enrollment needs the saved SSH key and root password, without
+typing anything at the new node.
+
+If you already applied the **temporary root-only rule below**, it blocks normal
+user SSH. Remove that exact temporary file at the new node's root console
+before using this method:
+
+```bash
+rm -f /etc/ssh/sshd_config.d/00-elektrokube-enrollment.conf && /usr/sbin/sshd -t && systemctl reload ssh
+```
+
+This removal is for the temporary rule only. An already enrolled node should
+use its original account and saved key; see recovery below.
+
+### Root enrollment without sudo (alternative)
 
 For a freshly installed node with a working local root password, log in at the
 **new node's console as root**. These commands do not use or require sudo.
@@ -127,9 +182,10 @@ saved first-node key and the original source IP. Do not reopen password login
 on a successfully enrolled node just to test it. Root's local console password
 is not changed by these scripts.
 
-For **non-root enrollment**, the new node additionally needs `sudo` installed
-and the selected user must have sudo privileges. `add-node.sh` never invokes
-sudo remotely when `--user root` is selected.
+For **normal-user enrollment**, prefer `su` as described above. Use
+`--elevate sudo` only when the new node has sudo installed and the selected user
+has unrestricted sudo privileges. `add-node.sh` never invokes su or sudo
+remotely when `--user root` is selected.
 
 ### Connection troubleshooting
 
@@ -138,6 +194,7 @@ sudo remotely when `--user root` is selected.
 | Connection refused / no host key returned | Correct node IP and SSH port; `systemctl status ssh`; install/start `openssh-server` |
 | Timeout / no route | Network connection, chosen source IP, routing and firewall; this is before password authentication |
 | Permission denied | `sshd -T -C ...` for the actual user/source; root password policy, account restrictions and password |
+| Root access through su failed | Use the new node's root password, not the SSH user's password; check that root is unlocked and local `su -` works |
 | Changed host key | Compare the fingerprint at the console before updating the first node's saved trust entry |
 
 For the actual reason behind an authentication rejection, run
@@ -222,6 +279,9 @@ sudo ./add-node.sh --host 192.168.2.156 --user debian --role hybrid
 ```
 
 Omit `--user` to be asked for it. `--port` supports a nondefault SSH port.
+Normal accounts use **su and the root password by default**; no target sudo is
+needed. To use an existing sudo account instead, add `--elevate sudo`.
+Direct `--user root` connections require neither elevation method.
 `--node-name` overrides the new node's short hostname. GPU and IOMMU options
 apply to that new node, independently of the first node's settings. For example:
 
@@ -232,17 +292,20 @@ sudo ./add-node.sh --host 192.168.2.154 --user debian \
 
 To avoid the host-key confirmation prompt, supply a fingerprint **already
 verified at the new node's console** using `--host-key-fingerprint 'SHA256:…'`.
-The script never silently trusts a changed host key. SSH/sudo passwords are
+The script never silently trusts a changed host key. SSH/root/sudo passwords are
 entered with hidden prompts and kept in process memory, not command arguments,
-environment variables, inventory files or Git. Press Enter at the sudo prompt
-to reuse the login password, or when sudo is already passwordless.
+environment variables, inventory files or Git. The root password for su is
+requested once on the first node and reused automatically during that run.
+With `--elevate sudo`, press Enter at the sudo prompt to reuse the login
+password, or when sudo is already passwordless.
 
 Enrollment performs these steps:
 
 1. Verify/pin the new node's Ed25519 SSH host key and check direct LAN addressing.
 2. Generate a per-node Ed25519 key **on the first node**. Only the public key is
    sent to the new node; the private key never leaves the first node.
-3. Install the public key and verify a separate key-only connection before
+3. Verify root access through su/sudo (unless logged in as root), install the
+   public key, and verify a separate key-only connection before
    disabling any existing authentication method.
 4. Copy scripts plus the appropriate join token through SSH. A worker receives
    the agent token; a server receives the server token. By default k3s may use
@@ -258,12 +321,14 @@ Enrollment performs these steps:
 7. Prepare the host and install the same pinned k3s release with its selected
    role. Wait for Kubernetes Ready and the Cilium DaemonSet rollout.
 
-The password used for sudo is discarded when provisioning ends. No permanent
-passwordless-sudo rule is added. Node software lives under
+The root/sudo password is discarded when provisioning ends. No permanent
+passwordless privilege rule is added. Node software lives under
 `/opt/elektrokube-scripts` on new nodes. Enrollment is serialized on the first
 node. If a step fails, fix its reported cause and rerun the **same command**;
 existing keys and matching node configuration are reused. Once SSH is hardened,
-subsequent runs need only the key and, for a normal account, its sudo password.
+subsequent runs need only the key and, for a normal account, the root password
+for su or its sudo password. Existing sudo-based enrollments should now include
+`--elevate sudo` explicitly when resuming.
 
 ### Keys, reconnecting and recovery
 
@@ -282,17 +347,20 @@ sudo ssh -i /root/.ssh/elektrokube/192.168.2.154-22.ed25519 \
 On a multi-interface first node, use the `-b SOURCE_IP` argument printed by the
 script. Existing SSH sessions are not forcibly terminated, but all **new**
 connections use the restricted policy after a successful enrollment.
+For root administration after connecting as a normal user, run `su -` (or
+`sudo -i` when using a sudo account).
 
 If verification fails after changing SSH, wait two minutes for rollback and
 retry. Password access may return while the previous policy is restored; a
 failed enrollment is not reported as hardened. If you lose the first node/key,
 change its IP, reinstall a target, or reboot during the rollback window, use the
-new node's console. To restore its original SSH configuration deliberately:
+new node's console. To restore its original SSH configuration deliberately,
+first become root with `su -` if needed, then run:
 
 ```bash
-sudo cp /etc/elektrokube/ssh/sshd_config.original /etc/ssh/sshd_config
-sudo /usr/sbin/sshd -t
-sudo systemctl reload ssh
+cp /etc/elektrokube/ssh/sshd_config.original /etc/ssh/sshd_config
+/usr/sbin/sshd -t
+systemctl reload ssh
 ```
 
 Do not erase a changed `known_hosts` entry without checking the new fingerprint

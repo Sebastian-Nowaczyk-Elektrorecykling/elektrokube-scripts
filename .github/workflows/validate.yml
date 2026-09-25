@@ -52,3 +52,17 @@ jobs:
           grep -qx 'pubkeyauthentication yes' /tmp/bootstrap-effective.conf
           grep -qx 'authenticationmethods any' /tmp/bootstrap-effective.conf
           grep -qx 'allowusers root@192.168.2.153' /tmp/bootstrap-effective.conf
+  su-enrollment:
+    runs-on: ubuntu-latest
+    container: debian:13
+    timeout-minutes: 10
+    env:
+      ELEKTROKUBE_DISPOSABLE_TEST_CONTAINER: '1'
+    steps:
+      - name: Install test tools in disposable Debian container (without sudo)
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git python3 openssh-server sshpass util-linux passwd
+      - uses: actions/checkout@v4
+      - name: Exercise real SSH and su authentication, then key-only access
+        run: python3 tests/integration_su.py
