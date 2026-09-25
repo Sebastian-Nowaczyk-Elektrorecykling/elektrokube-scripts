@@ -3,7 +3,7 @@ set -Eeuo pipefail
 # shellcheck source=lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
 usage() { echo 'Usage: prepare-admin.sh [--user USER] [--skip-headlamp] [--config FILE]'; }
-admin_user=${SUDO_USER:-}; headlamp=true; config="$REPO_ROOT/config/cluster.json"
+admin_user=$(default_admin_user); headlamp=true; config="$REPO_ROOT/config/cluster.json"
 while (($#)); do
   case "$1" in
     --user) admin_user=${2:?}; shift 2 ;;
@@ -14,7 +14,6 @@ while (($#)); do
   esac
 done
 root_only; debian_only; lock_host
-[[ -n $admin_user && $admin_user != root ]] || die 'Specify the non-root GNOME account with --user USER (or run with sudo).'
 getent passwd "$admin_user" >/dev/null || die 'Admin account does not exist.'
 admin_home=$(getent passwd "$admin_user" | cut -d: -f6)
 admin_group=$(id -gn "$admin_user")
@@ -49,7 +48,14 @@ if [[ $headlamp == true ]]; then
   flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
   flatpak install --system --noninteractive -y flathub io.kinvolk.Headlamp
   # Only kubeconfig access is needed; credentials use certificates, no host exec plugin.
-  flatpak override --system --filesystem="$admin_home/.kube:ro" io.kinvolk.Headlamp
+  if [[ $admin_user != root ]]; then
+    flatpak override --system --filesystem="$admin_home/.kube:ro" io.kinvolk.Headlamp
+  fi
 fi
-log "Admin access installed for $admin_user. Launch Headlamp from GNOME; kubectl get nodes -o wide tests access."
+log "Admin access installed for $admin_user; kubectl get nodes -o wide tests access."
+if [[ $admin_user == root ]]; then
+  log 'Root CLI administration is ready. For Headlamp, later run prepare-admin.sh --user YOUR_DESKTOP_USER and launch it from that GNOME account.'
+elif [[ $headlamp == true ]]; then
+  log 'Launch Headlamp from your GNOME session.'
+fi
 log 'The kubeconfig grants full cluster-admin access. Rerun prepare-admin.sh after k3s rotates its client certificate.'

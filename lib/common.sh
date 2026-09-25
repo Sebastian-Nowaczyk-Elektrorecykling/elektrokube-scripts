@@ -5,6 +5,14 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 log() { printf '\n[elektrokube] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 root_only() { [[ $EUID == 0 ]] || die 'Run this command with sudo/root.'; }
+default_admin_user() { printf '%s\n' "${SUDO_USER:-$(id -un)}"; }
+select_node_ip() {
+  local config=$1 explicit=${2:-} interface=${3:-}
+  local -a args=(--config "$config")
+  [[ -z $explicit ]] || args+=(--node-ip "$explicit")
+  [[ -z $interface ]] || args+=(--interface "$interface")
+  python3 "$REPO_ROOT/lib/discover.py" "${args[@]}"
+}
 debian_only() {
   # shellcheck source=/dev/null
   source /etc/os-release

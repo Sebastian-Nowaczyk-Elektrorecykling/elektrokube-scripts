@@ -2,11 +2,12 @@
 set -Eeuo pipefail
 # shellcheck source=lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
-usage() { echo 'Usage: bootstrap-cluster.sh --node-ip IP [--role hybrid|controller] [--node-name NAME] [--config FILE]'; }
-node_ip=; role=hybrid; node_name=$(hostname -s); config="$REPO_ROOT/config/cluster.json"
+usage() { echo 'Usage: bootstrap-cluster.sh [--node-ip IP] [--interface IFACE] [--role hybrid|controller] [--node-name NAME] [--config FILE]'; }
+node_ip=; interface=; role=hybrid; node_name=$(hostname -s); config="$REPO_ROOT/config/cluster.json"
 while (($#)); do
   case "$1" in
     --node-ip) node_ip=${2:?}; shift 2 ;;
+    --interface) interface=${2:?}; shift 2 ;;
     --role) role=${2:?}; shift 2 ;;
     --node-name) node_name=${2:?}; shift 2 ;;
     --config) config=${2:?}; shift 2 ;;
@@ -14,11 +15,12 @@ while (($#)); do
     *) usage; die "Unknown option: $1" ;;
   esac
 done
-[[ -n $node_ip ]] || { usage; die '--node-ip is required (use a static address or DHCP reservation).'; }
 [[ $role == hybrid || $role == controller ]] || die 'First node must be hybrid or controller.'
 root_only; debian_only; lock_host
 [[ -f /etc/systemd/system/elektrokube-no-swap.service ]] || die 'Run prepare-node.sh first, or use install.sh.'
+node_ip=$(select_node_ip "$config" "$node_ip" "$interface") || exit 1
 require_local_ip "$node_ip"
+log "Using first-node IPv4 $node_ip."
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp"' EXIT
 python3 "$REPO_ROOT/lib/config.py" resolve --config "$config" --node-ip "$node_ip" > "$tmp/cluster.json"
 load_config "$tmp/cluster.json"

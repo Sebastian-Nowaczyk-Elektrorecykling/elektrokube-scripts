@@ -42,7 +42,8 @@ dedicated controllers needs a worker/hybrid for ordinary applications.
   GNOME on the first node. For useful workloads, start with at least 4 CPU cores,
   8 GiB RAM and an SSD on the first node; allocate more for VMs, storage and GPUs.
 - Give every node a unique lowercase hostname and a **static IPv4 or DHCP
-  reservation**. The scripts use explicit IPv4 addresses; they do not configure
+  reservation**. The first node's address is detected automatically (or selected
+  with `--node-ip` / `--interface`); the scripts do not configure
   interfaces, DHCP, DNS, routing or the router. Address changes require planned
   cluster and SSH reconfiguration. This implementation is IPv4-only.
 - All node LAN addresses must be mutually reachable. Use direct LAN SSH without
@@ -53,7 +54,7 @@ dedicated controllers needs a worker/hybrid for ordinary applications.
   NVIDIA repository when relevant. The scripts install chrony.
 - Review `config/cluster.json`. Pod `10.42.0.0/16` and service `10.43.0.0/16`
   networks must not overlap your LAN, VPNs, routes, or each other. `api_address`
-  defaults to the first node's `--node-ip`. Bootstrap requires them to match.
+  defaults to the first node's detected/selected address. Bootstrap requires them to match.
 - On each **new node**, install/start `openssh-server` and have an existing
   account able to log in with a password and run unrestricted `sudo` (or use an
   already enabled root login). Passwordless sudo is supported but not required.
@@ -86,14 +87,35 @@ sudo apt-get install -y git ca-certificates python3
 git clone https://github.com/Sebastian-Nowaczyk-Elektrorecykling/elektrokube-scripts.git
 cd elektrokube-scripts
 
-ip -br -4 address
 # Edit config/cluster.json if your networks require different CIDRs.
-# Substitute the actual reserved/static LAN address of this machine:
-sudo ./install.sh --node-ip 192.168.2.153
+sudo ./install.sh
 ```
 
-`sudo` supplies the desktop account automatically. If running from a root shell,
-use `--admin-user YOUR_GNOME_USER`. Other options are `--node-name NAME`,
+No address or username argument is normally needed. The script prints the
+selected address and admin account before preparing the host:
+
+- **Address:** an explicit `--node-ip` takes precedence, followed by the saved
+  cluster address on reruns, then `api_address` in the configuration. Otherwise
+  it selects an address on the active default-route interface, preferring the
+  lowest route metric and an explicitly recorded source address. Without a
+  usable default route, a single suitable local IPv4 is sufficient. Loopback,
+  link-local, pod/service networks, and commonly named VPN/container interfaces
+  are excluded from automatic selection. An ambiguous result requires
+  `--interface IFACE` or `--node-ip IP`; both can be supplied to validate the
+  address against a particular interface. No Internet probe is required.
+- **Account:** `--admin-user USER` overrides the default. Otherwise `SUDO_USER`
+  selects the account that invoked sudo; direct root execution uses root. Root
+  gets its own kubeconfig and CLI tools. Headlamp is installed system-wide, but
+  should be launched from a normal GNOME account; give that account access later
+  with `./prepare-admin.sh --user YOUR_GNOME_USER` from the root shell.
+
+For example, `sudo ./install.sh --interface enp3s0` chooses a specific LAN
+interface, and `sudo ./install.sh --node-ip 192.168.2.153 --admin-user root`
+explicitly selects both settings. If already logged in directly as root, simply
+run `./install.sh`. Detection does not make a DHCP lease permanent: reserve the
+selected address before relying on it for the cluster.
+
+Other options are `--node-name NAME`,
 `--gpu auto|none|nvidia|amd|intel`, `--enable-iommu`, `--skip-headlamp`, and
 `--config FILE`. Run any public script with `--help` for its arguments.
 
@@ -106,8 +128,8 @@ For a **dedicated-controller first node**, run the three steps explicitly:
 
 ```bash
 sudo ./prepare-node.sh --gpu none
-sudo ./bootstrap-cluster.sh --role controller --node-ip 192.168.2.153
-sudo ./prepare-admin.sh --user YOUR_GNOME_USER
+sudo ./bootstrap-cluster.sh --role controller
+sudo ./prepare-admin.sh
 ```
 
 The first server initializes embedded etcd immediately so additional controllers
@@ -290,12 +312,15 @@ and Cilium CLI, and tools including `jq`, `git`, `sshpass`, `dig`, `ping`, `mtr`
 and `sysstat`. Headlamp Desktop is installed from Flathub; launch it from GNOME
 or with `flatpak run io.kinvolk.Headlamp`, **as your desktop user**.
 
-The user gets a mode-0600 cluster-admin kubeconfig at `~/.kube/elektrokube.yaml`.
+The selected admin account (including root when chosen) gets a mode-0600
+cluster-admin kubeconfig at `~/.kube/elektrokube.yaml`.
 If no `~/.kube/config` exists, it points there. An existing config is preserved:
 use `export KUBECONFIG=~/.kube/elektrokube.yaml` or import that file into Headlamp.
 Kubeconfig access grants full control of the cluster. Keep it private and rerun
 `prepare-admin.sh` after k3s rotates its embedded client certificate. The desktop
-application gets read access to the user's `.kube` directory.
+application gets read access to the selected non-root user's `.kube` directory;
+root's kubeconfig is not exposed to desktop applications. `prepare-admin.sh`
+uses the same sudo-user/current-user default, with an optional `--user` override.
 
 ```bash
 kubectl get nodes -o wide
