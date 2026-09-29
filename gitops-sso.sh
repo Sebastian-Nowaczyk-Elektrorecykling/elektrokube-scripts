@@ -54,7 +54,7 @@ NAME = "elektrokube-sso"
 GIT_URL = "https://github.com/Sebastian-Nowaczyk-Elektrorecykling/elektrokube-sso.git"
 CHILDREN = tuple("sso-" + name for name in (
     "foundation", "controllers", "credentials", "certificates", "databases",
-    "authentik", "openfga", "authorization", "gateway", "oauth2-proxy",
+    "authentik", "gateway", "oauth2-proxy",
     "heimdall", "routes", "dns"))
 
 
@@ -136,7 +136,7 @@ def preflight():
             labels = existing["metadata"].get("labels", {})
             flux.require(labels.get("kustomize.toolkit.fluxcd.io/name") == owner and
                          labels.get("kustomize.toolkit.fluxcd.io/namespace") == "flux-system",
-                         f"Existing {kind}/{name} is not owned by this SSO graph; migrate it explicitly.")
+                         f"Existing {kind}/{name} is not owned by this SSO graph; use a clean installation target.")
     if not flux.get(flux.RELEASE, "sso-cert-manager", "cert-manager"):
         controllers = json.loads(flux.kube("get", "deployments", "-A", "-l",
                                           "app.kubernetes.io/name=cert-manager", "-o", "json"))["items"]
@@ -181,7 +181,7 @@ def register(workdir):
         flux.log(f"Waiting for {name} at {revision}.")
         flux.reconcile(flux.SYNC, name, revision=revision)
     flux.kube("-n", "sso", "wait", "gateway/lan-gateway", "--for=condition=Programmed", "--timeout=300s")
-    for route in ("sso-http-redirect", "sso-login", "sso-auth", "sso-authentik-admin", "sso-openfga-admin"):
+    for route in ("sso-http-redirect", "sso-login", "sso-auth", "sso-authentik-admin"):
         flux.wait_for("httproute", route, "sso", route_ready, timeout=300)
     flux.log(f"SSO and internal DNS reconciled at {revision}.")
     flux.log("Follow elektrokube-sso/README.md to trust the CA, configure LAN DNS, and obtain the generated akadmin password.")
