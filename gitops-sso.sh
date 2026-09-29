@@ -89,7 +89,7 @@ def route_ready(obj):
     if not obj:
         return False
     for parent in obj.get("status", {}).get("parents", []):
-        if parent.get("parentRef", {}).get("name") != "sso":
+        if parent.get("parentRef", {}).get("name") != "lan-gateway":
             continue
         conditions = {c["type"]: c for c in parent.get("conditions", [])}
         if all(conditions.get(t, {}).get("status") == "True" and
@@ -180,7 +180,7 @@ def register(workdir):
     for name in (NAME, *CHILDREN):
         flux.log(f"Waiting for {name} at {revision}.")
         flux.reconcile(flux.SYNC, name, revision=revision)
-    flux.kube("-n", "sso", "wait", "gateway/sso", "--for=condition=Programmed", "--timeout=300s")
+    flux.kube("-n", "sso", "wait", "gateway/lan-gateway", "--for=condition=Programmed", "--timeout=300s")
     for route in ("sso-http-redirect", "sso-login", "sso-auth", "sso-authentik-admin", "sso-openfga-admin"):
         flux.wait_for("httproute", route, "sso", route_ready, timeout=300)
     flux.log(f"SSO and internal DNS reconciled at {revision}.")
