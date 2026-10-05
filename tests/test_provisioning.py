@@ -12,11 +12,72 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 import config
 import enroll
 import ssh_access
+
+
+# Independent snapshot of elektrokube-cilium-and-flux/infrastructure/cilium/values.yaml.
+# Git blob: 77df9af93c0d33bf5d9e4a44de4315c18b11c493. Do not derive it from the renderer.
+GITOPS_CILIUM_VALUES = """\
+# Match elektrokube-scripts/lib/config.py:cilium_values for initial adoption.
+# Cluster-specific strings are supplied by flux-system/cluster-settings.
+cluster:
+  name: "${CLUSTER_NAME}"
+kubeProxyReplacement: true
+k8sServiceHost: "${API_IP}"
+k8sServicePort: 6443
+ipam:
+  mode: kubernetes
+routingMode: tunnel
+tunnelProtocol: vxlan
+bpf:
+  masquerade: true
+l7Proxy: true
+envoy:
+  enabled: true
+  securityContext:
+    capabilities:
+      # Host-network listeners normally bind to the privileged ingress ports 80 and 443.
+      keepCapNetBindService: true
+      envoy:
+        - NET_ADMIN
+        - SYS_ADMIN
+        - NET_BIND_SERVICE
+gatewayAPI:
+  enabled: true
+  # Expose Gateway listeners directly on every Cilium node's host IP.
+  # This replaces the need to advertise LoadBalancer IPs with L2 or BGP.
+  hostNetwork:
+    enabled: true
+  gatewayClass:
+    create: true
+ipv4:
+  enabled: true
+ipv6:
+  enabled: false
+operator:
+  replicas: 1
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+  ui:
+    enabled: true
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+"""
 
 
 class ConfigTests(unittest.TestCase):
@@ -30,9 +91,24 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.cilium_values(self.c)["kubeProxyReplacement"])
         self.assertEqual(config.cilium_values(self.c)["ipam"]["mode"], "kubernetes")
         self.assertEqual(config.cilium_values(self.c)["gatewayAPI"],
-                         {"enabled": True, "gatewayClass": {"create": True}})
+                         {"enabled": True, "hostNetwork": {"enabled": True}, "gatewayClass": {"create": True}})
         self.assertTrue(config.cilium_values(self.c)["l7Proxy"])
         self.assertTrue(config.cilium_values(self.c)["envoy"]["enabled"])
+
+    def test_cilium_values_match_independent_gitops_snapshot(self):
+        for name, address in (("elektrokube", "192.168.2.153"), ("fresh-cluster", "192.168.50.10")):
+            with self.subTest(cluster_name=name, api_address=address):
+                settings = dict(self.c, cluster_name=name, api_address=address)
+                desired = GITOPS_CILIUM_VALUES.replace("${CLUSTER_NAME}", name).replace("${API_IP}", address)
+                self.assertEqual(config.cilium_values(settings), yaml.safe_load(desired))
+
+    def test_cilium_host_network_supports_privileged_gateway_listeners(self):
+        values = config.cilium_values(self.c)
+        self.assertTrue(values["gatewayAPI"]["hostNetwork"]["enabled"])
+        self.assertTrue(values["envoy"]["enabled"])
+        capabilities = values["envoy"]["securityContext"]["capabilities"]
+        self.assertTrue(capabilities["keepCapNetBindService"])
+        self.assertEqual(capabilities["envoy"], ["NET_ADMIN", "SYS_ADMIN", "NET_BIND_SERVICE"])
 
     def test_server_join_has_matching_critical_configuration(self):
         first = config.node_config(self.c, "hybrid", "192.168.2.153", "first", True)
