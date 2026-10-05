@@ -91,6 +91,7 @@ def node_config(c, role, address, name, first=False):
 
 
 def cilium_values(c):
+    # Keep initial adoption aligned with elektrokube-cilium-and-flux/infrastructure/cilium/values.yaml.
     validate(c)
     tolerate = [{"key": "CriticalAddonsOnly", "operator": "Exists"}]
     return {"cluster": {"name": c["cluster_name"]},
@@ -98,8 +99,11 @@ def cilium_values(c):
             "k8sServicePort": 6443, "ipam": {"mode": "kubernetes"},
             "routingMode": "tunnel", "tunnelProtocol": "vxlan",
             "bpf": {"masquerade": True},
-            "l7Proxy": True, "envoy": {"enabled": True},
-            "gatewayAPI": {"enabled": True, "gatewayClass": {"create": True}},
+            "l7Proxy": True,
+            # Host-network Gateway listeners on ports 80/443 need NET_BIND_SERVICE.
+            "envoy": {"enabled": True, "securityContext": {"capabilities": {
+                "keepCapNetBindService": True, "envoy": ["NET_ADMIN", "SYS_ADMIN", "NET_BIND_SERVICE"]}}},
+            "gatewayAPI": {"enabled": True, "hostNetwork": {"enabled": True}, "gatewayClass": {"create": True}},
             "ipv4": {"enabled": True}, "ipv6": {"enabled": False},
             "operator": {"replicas": 1, "tolerations": tolerate},
             "hubble": {"enabled": True, "relay": {"enabled": True, "tolerations": tolerate},
