@@ -22,12 +22,14 @@ import ssh_access
 
 
 # Independent snapshot of elektrokube-cilium-and-flux/infrastructure/cilium/values.yaml.
-# Git blob: 77df9af93c0d33bf5d9e4a44de4315c18b11c493. Do not derive it from the renderer.
+# Git blob: 59df05cdd0886113aa2eafb37d5c1bfc22be0056. Do not derive it from the renderer.
 GITOPS_CILIUM_VALUES = """\
 # Match elektrokube-scripts/lib/config.py:cilium_values for initial adoption.
 # Cluster-specific strings are supplied by flux-system/cluster-settings.
 cluster:
   name: "${CLUSTER_NAME}"
+# Propagate ConfigMap changes to running agents through chart-managed rollouts.
+rollOutCiliumPods: true
 kubeProxyReplacement: true
 k8sServiceHost: "${API_IP}"
 k8sServicePort: 6443
@@ -40,6 +42,7 @@ bpf:
 l7Proxy: true
 envoy:
   enabled: true
+  rollOutPods: true
   securityContext:
     capabilities:
       # Host-network listeners normally bind to the privileged ingress ports 80 and 443.
@@ -62,6 +65,7 @@ ipv6:
   enabled: false
 operator:
   replicas: 1
+  rollOutPods: true
   tolerations:
     - key: CriticalAddonsOnly
       operator: Exists

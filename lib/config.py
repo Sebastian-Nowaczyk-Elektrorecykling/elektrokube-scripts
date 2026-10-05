@@ -94,18 +94,20 @@ def cilium_values(c):
     # Keep initial adoption aligned with elektrokube-cilium-and-flux/infrastructure/cilium/values.yaml.
     validate(c)
     tolerate = [{"key": "CriticalAddonsOnly", "operator": "Exists"}]
+    # Chart checksums roll the agents, operator and Envoy when their ConfigMaps change.
     return {"cluster": {"name": c["cluster_name"]},
+            "rollOutCiliumPods": True,
             "kubeProxyReplacement": True, "k8sServiceHost": c["api_address"],
             "k8sServicePort": 6443, "ipam": {"mode": "kubernetes"},
             "routingMode": "tunnel", "tunnelProtocol": "vxlan",
             "bpf": {"masquerade": True},
             "l7Proxy": True,
             # Host-network Gateway listeners on ports 80/443 need NET_BIND_SERVICE.
-            "envoy": {"enabled": True, "securityContext": {"capabilities": {
+            "envoy": {"enabled": True, "rollOutPods": True, "securityContext": {"capabilities": {
                 "keepCapNetBindService": True, "envoy": ["NET_ADMIN", "SYS_ADMIN", "NET_BIND_SERVICE"]}}},
             "gatewayAPI": {"enabled": True, "hostNetwork": {"enabled": True}, "gatewayClass": {"create": True}},
             "ipv4": {"enabled": True}, "ipv6": {"enabled": False},
-            "operator": {"replicas": 1, "tolerations": tolerate},
+            "operator": {"replicas": 1, "rollOutPods": True, "tolerations": tolerate},
             "hubble": {"enabled": True, "relay": {"enabled": True, "tolerations": tolerate},
                        "ui": {"enabled": True, "tolerations": tolerate}}}
 
