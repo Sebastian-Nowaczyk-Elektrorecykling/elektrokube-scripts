@@ -45,6 +45,8 @@ class Cluster:
         self.live_values = copy.deepcopy(self.values)
         self.chart = "cilium-" + settings["cilium_version"]
         self.helm_status = "deployed"
+        self.helm_releases = None
+        self.emit_values_configmap = True
         self.fail_apply = False
 
     def put(self, resource, name, value, namespace="flux-system"):
@@ -59,7 +61,10 @@ class Cluster:
         if args[:2] == ("git", "ls-remote"):
             return self.remote_commit + "\trefs/heads/main"
         if args[:2] == ("helm", "list"):
-            return json.dumps([{"chart": self.chart, "status": self.helm_status}])
+            releases = self.helm_releases
+            if releases is None:
+                releases = [{"chart": self.chart, "status": self.helm_status}]
+            return json.dumps(releases)
         if args[:3] == ("helm", "get", "values"):
             return json.dumps(self.live_values)
         raise AssertionError(args)
@@ -71,6 +76,8 @@ class Cluster:
             if path.endswith("infrastructure/flux"):
                 return yaml.safe_dump_all(self.flux)
             if path.endswith("infrastructure/cilium"):
+                if not self.emit_values_configmap:
+                    return yaml.safe_dump_all([self.release])
                 cm = obj("ConfigMap", "cilium-values", namespace="kube-system")
                 cm["data"] = {"values.yaml": yaml.safe_dump(self.values)}
                 return yaml.safe_dump_all([self.release, cm])
@@ -137,8 +144,9 @@ class HandoffTests(unittest.TestCase):
 
     def handoff(self):
         with patch.object(gitops, "kube", self.cluster.kube), patch.object(gitops, "run", self.cluster.run), \
-                patch.object(gitops, "log"):
+                patch.object(gitops, "log") as messages:
             gitops.handoff(self.work, self.settings)
+        return messages
 
     def test_first_handoff_orders_raw_install_settings_seed_and_fresh_reconciliation(self):
         self.handoff()
@@ -152,20 +160,81 @@ class HandoffTests(unittest.TestCase):
         reconciles = [call[4] for call in self.cluster.calls if "annotate" in call]
         self.assertEqual(reconciles, ["flux-system", "flux-system", "flux", "gateway-api", "cilium", "cilium"])
         self.assertIn(("wait", "gatewayclass/cilium", "--for=condition=Accepted", "--timeout=300s"), self.cluster.calls)
-        self.assertTrue(all(c[1] in ("list", "get") for c in self.cluster.calls if c[0] == "helm"))
+        self.assertEqual([c[1] for c in self.cluster.calls if c[0] == "helm"], ["list"])
 
-    def test_refuses_changed_live_values_before_cluster_writes(self):
-        self.cluster.live_values["kubeProxyReplacement"] = False
-        with self.assertRaisesRegex(ValueError, "Live Cilium"):
-            self.handoff()
-        self.assertEqual(self.cluster.applies(), [])
+    def test_first_handoff_accepts_git_values_different_from_bootstrap(self):
+        self.cluster.values["operator"]["replicas"] = 2
+        self.cluster.values["debug"] = {"enabled": True}
+        del self.cluster.values["hubble"]
+        desired = copy.deepcopy(self.cluster.values)
+        self.handoff()
+        self.assertEqual(len(self.cluster.applies()), 3)
+        self.assertEqual(self.cluster.values, desired)
+        self.assertTrue(any(c[:5] == ("-n", "kube-system", "annotate", gitops.RELEASE, "cilium")
+                            for c in self.cluster.calls))
 
-    def test_refuses_wrong_chart_or_failed_release_before_cluster_writes(self):
-        for field, value in (("chart", "cilium-1.19.0"), ("helm_status", "failed")):
-            with self.subTest(field=field):
+    def test_first_handoff_accepts_live_values_different_from_git(self):
+        self.cluster.live_values["operator"]["replicas"] = 3
+        self.handoff()
+        self.assertEqual(len(self.cluster.applies()), 3)
+        self.assertFalse(any(c[:3] == ("helm", "get", "values") for c in self.cluster.calls))
+
+    def test_first_handoff_accepts_git_versions_different_from_bootstrap_and_live(self):
+        for version in ("1.20.3", "1.19.0", ">=1.20.0 <1.21.0"):
+            with self.subTest(version=version):
+                self.cluster = Cluster(self.settings)
+                self.cluster.release["spec"]["chart"]["spec"]["version"] = version
+                self.handoff()
+                adopted = self.cluster.objects[(gitops.RELEASE, "kube-system", "cilium")]
+                self.assertEqual(adopted["spec"]["chart"]["spec"]["version"], version)
+                self.assertEqual(len(self.cluster.applies()), 3)
+
+    def test_first_handoff_accepts_simultaneous_git_and_live_drift(self):
+        self.cluster.chart = "cilium-1.19.0"
+        self.cluster.live_values["operator"]["replicas"] = 3
+        self.cluster.values["operator"]["replicas"] = 2
+        self.cluster.release["spec"]["chart"]["spec"]["version"] = "1.20.3"
+        messages = self.handoff()
+        self.assertEqual(len(self.cluster.applies()), 3)
+        self.assertTrue(any("Git is authoritative" in c.args[0] for c in messages.call_args_list))
+        self.assertTrue(any("restart cluster networking" in c.args[0] for c in messages.call_args_list))
+        self.assertEqual([c[1] for c in self.cluster.calls if c[0] == "helm"], ["list"])
+
+    def test_first_handoff_defers_values_resolution_to_flux(self):
+        self.cluster.emit_values_configmap = False
+        self.cluster.release["spec"]["values"] = {"operator": {"replicas": 2}}
+        self.handoff()
+        adopted = self.cluster.objects[(gitops.RELEASE, "kube-system", "cilium")]
+        self.assertEqual(adopted["spec"]["values"], {"operator": {"replicas": 2}})
+        self.assertEqual(len(self.cluster.applies()), 3)
+
+    def test_refuses_non_cilium_chart_or_undeployed_release_before_cluster_writes(self):
+        for field, value in (("chart", "other-1.20.2"), ("helm_status", "failed"),
+                             ("helm_status", "pending-upgrade")):
+            with self.subTest(field=field, value=value):
                 self.cluster = Cluster(self.settings)
                 setattr(self.cluster, field, value)
-                with self.assertRaisesRegex(ValueError, "already deployed matching"):
+                with self.assertRaisesRegex(ValueError, "already deployed Cilium"):
+                    self.handoff()
+                self.assertEqual(self.cluster.applies(), [])
+
+    def test_refuses_missing_or_ambiguous_live_release_before_cluster_writes(self):
+        release = {"chart": "cilium-1.20.2", "status": "deployed"}
+        for releases in ([], [release, release]):
+            with self.subTest(releases=releases):
+                self.cluster = Cluster(self.settings)
+                self.cluster.helm_releases = releases
+                with self.assertRaisesRegex(ValueError, "already deployed Cilium"):
+                    self.handoff()
+                self.assertEqual(self.cluster.applies(), [])
+
+    def test_refuses_changed_git_release_identity_before_cluster_writes(self):
+        for section, field in (("metadata", "namespace"), ("spec", "releaseName"),
+                               ("spec", "targetNamespace"), ("spec", "storageNamespace")):
+            with self.subTest(section=section, field=field):
+                self.cluster = Cluster(self.settings)
+                self.cluster.release[section][field] = "other"
+                with self.assertRaisesRegex(ValueError, "release identity"):
                     self.handoff()
                 self.assertEqual(self.cluster.applies(), [])
 

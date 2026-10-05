@@ -9,7 +9,12 @@ Usage: gitops-cilium-and-flux.sh
 Run as root on the first node after bootstrap-cluster.sh/install.sh.
 Install the raw Flux manifests from elektrokube-cilium-and-flux/main, then
 connect that repository to the existing Cilium release and Flux controllers.
-Uses /etc/elektrokube/cluster.json and /etc/rancher/k3s/k3s.yaml.
+Git is authoritative for Cilium values and chart version, including first adoption.
+Bootstrap/live Cilium values and versions do not have to match Git. Flux applies
+Git's desired state; changes may upgrade/downgrade Cilium and restart networking.
+Release identity, ownership, and readiness checks remain in place.
+Uses /etc/elektrokube/cluster.json for cluster substitutions and
+/etc/rancher/k3s/k3s.yaml for Kubernetes access.
 No flux bootstrap, GitHub credentials, Git writes, or Cilium reinstall.
 EOF
 }

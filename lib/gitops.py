@@ -9,7 +9,7 @@ import time
 
 import yaml
 
-from config import cilium_values, load
+from config import load
 
 GIT_URL = "https://github.com/Sebastian-Nowaczyk-Elektrorecykling/elektrokube-cilium-and-flux.git"
 BRANCH = "main"
@@ -175,20 +175,16 @@ def handoff(workdir, config):
                 "Existing HelmRelease/cilium is not owned by this GitOps graph; refusing to take it over.")
         log("Cilium is already owned by this GitOps repository; preserving its Git-managed version and values.")
     else:
-        desired_text = one(cilium_objects, "ConfigMap", "cilium-values")["data"]["values.yaml"]
-        desired_text = desired_text.replace("${API_IP}", config["api_address"]).replace("${CLUSTER_NAME}", config["cluster_name"])
-        require("${" not in desired_text, "The Cilium values contain unsupported substitutions.")
-        desired_values = yaml.safe_load(desired_text)
-        require(desired_values == cilium_values(config), "Git Cilium values differ from the saved bootstrap configuration; review before adoption.")
-        version = desired_release["spec"]["chart"]["spec"]["version"]
-        require(version == config["cilium_version"], "Git Cilium version differs from the saved bootstrap version.")
+        # Bootstrap only supplies the initial CNI. Git is authoritative at handoff,
+        # including changed values and chart versions. Let Flux resolve valuesFrom,
+        # inline values and substitutions instead of comparing them with bootstrap.
         releases = json.loads(run("helm", "list", "--kubeconfig", KUBECONFIG, "-n", "kube-system",
                                   "--filter", "^cilium$", "--all", "-o", "json"))
         require(len(releases) == 1 and releases[0].get("status") == "deployed" and
-                releases[0].get("chart") == f"cilium-{version}", "Expected an already deployed matching Cilium Helm release in kube-system.")
-        live_values = json.loads(run("helm", "get", "values", "cilium", "--kubeconfig", KUBECONFIG,
-                                    "-n", "kube-system", "-o", "json"))
-        require(live_values == desired_values, "Live Cilium Helm values differ from Git; refusing to reset them during adoption.")
+                releases[0].get("chart", "").startswith("cilium-"),
+                "Expected an already deployed Cilium Helm release in kube-system.")
+        log("Git is authoritative for Cilium version and values; skipping bootstrap/live configuration comparisons.")
+        log("WARNING: Flux may upgrade or downgrade Cilium and restart cluster networking during adoption.")
         kube("-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=300s")
 
     settings = {"API_IP": config["api_address"], "CLUSTER_NAME": config["cluster_name"]}
