@@ -41,7 +41,7 @@ fi
 install_helm
 install_cilium_cli
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-log "Installing Gateway API $GATEWAY_API_VERSION before Cilium."
+log "Installing Gateway API $GATEWAY_API_VERSION experimental CRDs before Cilium."
 install_gateway_api
 python3 "$REPO_ROOT/lib/config.py" cilium --config /etc/elektrokube/cluster.json > "$tmp/cilium-values.json"
 install -m 0600 "$tmp/cilium-values.json" /etc/elektrokube/cilium-values.json

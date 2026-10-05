@@ -39,8 +39,10 @@ download() { curl --fail --silent --show-error --location --proto '=https' --tls
 kube() { /usr/local/bin/k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml "$@"; }
 install_gateway_api() (
   local_tmp=$(mktemp -d); trap 'rm -rf -- "$local_tmp"' EXIT
-  download "https://github.com/kubernetes-sigs/gateway-api/releases/download/$GATEWAY_API_VERSION/standard-install.yaml" "$local_tmp/gateway-api.yaml"
-  printf '%s  %s\n' "$GATEWAY_API_SHA256" "$local_tmp/gateway-api.yaml" | sha256sum --check --status || die 'Gateway API bundle checksum mismatch.'
+  # Match the GitOps experimental channel, which also includes the standard APIs.
+  # Install only this bundle; the checksum must pin experimental-install.yaml.
+  download "https://github.com/kubernetes-sigs/gateway-api/releases/download/$GATEWAY_API_VERSION/experimental-install.yaml" "$local_tmp/gateway-api.yaml"
+  printf '%s  %s\n' "$GATEWAY_API_SHA256" "$local_tmp/gateway-api.yaml" | sha256sum --check --status || die 'Gateway API bundle checksum mismatch; gateway_api_sha256 must pin experimental-install.yaml.'
   # Server-side apply handles large CRDs and matches the future Flux field manager.
   resources=$(kube apply --server-side --field-manager=kustomize-controller -f "$local_tmp/gateway-api.yaml" -o name)
   while IFS= read -r resource; do
