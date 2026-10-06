@@ -1,5 +1,8 @@
 # elektrokube-scripts
 
+See the [2026-10-06 audit and upgrade plan](docs/audit-2026-10-06.md) for
+verified release pins, compatibility exceptions, findings and existing-cluster rollout.
+
 Install **k3s + Cilium on Debian 13** and administer the cluster from its first
 node. Download this repository only onto that first node. `add-node.sh` copies
 the required scripts to new nodes and provisions them through SSH.
@@ -271,7 +274,7 @@ default storage class until you install a storage provisioner.
 
 ### Gateway API for applications
 
-Fresh bootstrap installs the pinned Gateway API **v1.6.1 standard bundle** with
+Fresh bootstrap installs the pinned Gateway API **v1.6.2 experimental bundle** with
 server-side apply and waits for the CRDs to become Established before installing
 Cilium. The bundle's SHA256 is checked against `config/cluster.json`. It includes
 GatewayClass, Gateway, HTTPRoute, GRPCRoute, TLSRoute, TCPRoute, UDPRoute,
@@ -307,10 +310,12 @@ It installs Debian's `python3-yaml` package if needed. It fetches `main` from
 or call `flux bootstrap`. Neither the Flux CLI nor a GitHub token is required.
 
 Before the first handoff, the existing `cilium` Helm release in `kube-system`
-must be deployed with the same chart version and values as both the saved
-bootstrap configuration and the GitOps repository. A mismatch stops the script
-before cluster changes. An existing Flux Helm/Operator installation or a
-conflicting GitOps source also requires a deliberate migration first.
+must be deployed. Git is authoritative for its chart version and values: adoption
+can upgrade or downgrade Cilium and restart networking. Review the GitOps diff
+and Cilium's supported upgrade path before handoff. The script checks release
+identity and ownership, but does not enforce a safe version transition. An
+existing Flux Helm/Operator installation or a conflicting GitOps source requires
+a deliberate migration first.
 
 The script applies `infrastructure/flux` directly, waits for the CRDs and four
 controllers, and creates `flux-system/cluster-settings` with `API_IP` and
@@ -625,12 +630,12 @@ Defaults verified against upstream release/documentation references:
 
 | Component | Pin / source |
 | --- | --- |
-| k3s | `v1.36.4+k3s1` |
+| k3s | `v1.36.5+k3s1` |
 | Cilium | `1.20.2` (its documented Kubernetes range includes 1.36) |
-| Gateway API | `v1.6.1`, standard CRDs and admission policy; SHA256 pinned in configuration |
+| Gateway API | `v1.6.2`, experimental CRDs (including ExternalAuth) and admission policy; SHA256 pinned in configuration |
 | Cilium CLI | `v0.20.1` |
-| Helm | `v3.19.0` |
-| NVIDIA Container Toolkit | `1.20.0-1` |
+| Helm | `v4.3.0` |
+| NVIDIA Container Toolkit | `1.20.1-1` |
 | Host packages / Headlamp | Debian APT / signed Flathub updates |
 
 The k3s installer is downloaded from the pinned tag and checked against the
