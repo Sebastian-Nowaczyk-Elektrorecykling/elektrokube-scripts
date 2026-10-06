@@ -51,7 +51,7 @@ def validate(c, require_api=True):
         "gateway_api_version": r"v\d+\.\d+\.\d+",
         "gateway_api_sha256": r"[0-9a-f]{64}",
         "cilium_cli_version": r"v\d+\.\d+\.\d+",
-        "helm_version": r"v3\.\d+\.\d+",
+        "helm_version": r"v[34]\.\d+\.\d+",
         "nvidia_toolkit_version": r"\d+\.\d+\.\d+-\d+",
     }
     for key, pattern in patterns.items():

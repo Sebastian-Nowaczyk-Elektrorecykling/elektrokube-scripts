@@ -4,12 +4,12 @@
   "pod_cidr": "10.42.0.0/16",
   "service_cidr": "10.43.0.0/16",
   "cluster_dns": "10.43.0.10",
-  "k3s_version": "v1.36.4+k3s1",
+  "k3s_version": "v1.36.5+k3s1",
   "k3s_installer_sha256": "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad",
   "cilium_version": "1.20.2",
-  "gateway_api_version": "v1.6.1",
-  "gateway_api_sha256": "d7fa77650e4ef28fca0411536fcb5e237deb4d50301cfded3be49d9a1b7bbd02",
+  "gateway_api_version": "v1.6.2",
+  "gateway_api_sha256": "fb03263a4a720cc7abe9b36ede6e308b558d2d725a39595d664f34fe37f9c503",
   "cilium_cli_version": "v0.20.1",
-  "helm_version": "v3.19.0",
-  "nvidia_toolkit_version": "1.20.0-1"
+  "helm_version": "v4.3.0",
+  "nvidia_toolkit_version": "1.20.1-1"
 }

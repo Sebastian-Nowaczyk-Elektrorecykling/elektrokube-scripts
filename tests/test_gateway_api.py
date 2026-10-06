@@ -10,10 +10,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = b"# pinned test Gateway API bundle\n"
 # Independent pin from elektrokube-cilium-and-flux/infrastructure/gateway-api/kustomization.yaml
-# (Git blob 6a8ca16a7a38db2f140959e9e18a185ae0200a1a). The digest is published at
-# https://api.github.com/repos/kubernetes-sigs/gateway-api/releases/assets/479238872.
-GITOPS_BUNDLE_URL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/experimental-install.yaml"
-EXPERIMENTAL_SHA256 = "d7fa77650e4ef28fca0411536fcb5e237deb4d50301cfded3be49d9a1b7bbd02"
+# The digest was checked against the v1.6.2 release's experimental-install.yaml
+# asset metadata and the downloaded bundle on 2026-10-06.
+GITOPS_BUNDLE_URL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/experimental-install.yaml"
+EXPERIMENTAL_SHA256 = "fb03263a4a720cc7abe9b36ede6e308b558d2d725a39595d664f34fe37f9c503"
 CRDS = ("gateways", "gatewayclasses", "httproutes", "tcproutes", "udproutes", "tlsroutes")
 
 
@@ -46,7 +46,7 @@ install_gateway_api
 printf 'CILIUM_INSTALL\n' >> "$TEST_GATEWAY_LOG"
 '''
             env = {**os.environ, "TMPDIR": tmp, "TEST_REPO": str(ROOT), "TEST_GATEWAY_LOG": str(log),
-                   "TEST_GATEWAY_FAILURE": failure, "GATEWAY_API_VERSION": "v1.6.1",
+                   "TEST_GATEWAY_FAILURE": failure, "GATEWAY_API_VERSION": "v1.6.2",
                    "TEST_GATEWAY_CRDS": "\n".join(
                        f"customresourcedefinition.apiextensions.k8s.io/{name}.gateway.networking.k8s.io"
                        for name in CRDS),

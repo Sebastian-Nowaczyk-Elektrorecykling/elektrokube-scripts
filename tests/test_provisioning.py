@@ -141,7 +141,7 @@ class ConfigTests(unittest.TestCase):
         mutations = [("pod_cidr", "10.43.0.0/16"), ("pod_cidr", "10.42.0.1/16"),
                      ("cluster_dns", "1.1.1.1"), ("cluster_dns", "10.43.0.1"),
                      ("api_address", "10.42.1.3"), ("api_address", "127.0.0.1"),
-                     ("helm_version", "latest"), ("k3s_version", "v1.36.4+k3s1;id"),
+                     ("helm_version", "latest"), ("k3s_version", "v1.36.5+k3s1;id"),
                      ("k3s_installer_sha256", "bad"), ("cluster_name", "UPPER"),
                      ("gateway_api_version", "latest"), ("gateway_api_sha256", "bad")]
         for key, value in mutations:
